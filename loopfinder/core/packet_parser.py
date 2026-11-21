@@ -246,6 +246,7 @@ def _parse_dhcp(udp_payload: bytes, src_mac: str, src_ip: str) -> Optional[Dict[
     yiaddr = socket.inet_ntoa(udp_payload[16:20])
     siaddr = socket.inet_ntoa(udp_payload[20:24])
     chaddr = mac_bytes_to_str(udp_payload[28:34])
+    sname = udp_payload[44:108].split(b"\x00", 1)[0].decode("utf-8", errors="ignore").strip()
 
     msg_type = 0
     server_id = ""
@@ -253,6 +254,9 @@ def _parse_dhcp(udp_payload: bytes, src_mac: str, src_ip: str) -> Optional[Dict[
     subnet_mask = ""
     dns_servers = []
     lease_time = 0
+    host_name = ""
+    domain_name = ""
+    vendor_class = ""
 
     pos = 240
     n = len(udp_payload)
@@ -285,6 +289,12 @@ def _parse_dhcp(udp_payload: bytes, src_mac: str, src_ip: str) -> Optional[Dict[
                 dns_servers.append(socket.inet_ntoa(val[i : i + 4]))
         elif opt == 51 and length == 4:
             lease_time = struct.unpack_from("!I", val, 0)[0]
+        elif opt == 12 and length > 0:
+            host_name = val.decode("utf-8", errors="ignore").strip("\x00 ")
+        elif opt == 15 and length > 0:
+            domain_name = val.decode("utf-8", errors="ignore").strip("\x00 ")
+        elif opt == 60 and length > 0:
+            vendor_class = val.decode("utf-8", errors="ignore").strip("\x00 ")
 
     msg_names = {
         1: "DISCOVER", 2: "OFFER", 3: "REQUEST", 4: "DECLINE",
@@ -303,6 +313,10 @@ def _parse_dhcp(udp_payload: bytes, src_mac: str, src_ip: str) -> Optional[Dict[
         "dns": dns_servers,
         "lease_time": lease_time,
         "client_mac": chaddr,
+        "sname": sname,
+        "host_name": host_name,
+        "domain_name": domain_name,
+        "vendor_class": vendor_class,
     }
 
 

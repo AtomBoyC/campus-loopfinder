@@ -6,9 +6,12 @@ Also supports optionally loading a standard IEEE oui.txt file if present.
 
 from __future__ import annotations
 
+import gzip
 import os
 import re
 from typing import Dict, Tuple
+
+from loopfinder.core.paths import resource_path
 
 # Category codes:
 # - "soho_router": 家用/小型无线路由器或桌面小交换机（教研室私接环路高发嫌疑）
@@ -404,16 +407,90 @@ CATEGORY_LABELS = {
 }
 
 _EXTERNAL_LOADED = False
-_SOHO_KEYWORDS = (
-    "tp-link", "mercury", "fast", "tenda", "xiaomi", "netcore", "d-link",
-    "netgear", "asus", "linksys", "phicomm", "totolink", "edimax", "buffalo",
-    "belkin", "shenzhen gongjin", "shenzhen bilian", "hiwifi", "qihoo",
+_IEEE_DB: Dict[str, str] = {}
+
+# Order matters: more specific rules (e.g. "huawei device" consumer routers) come before broader ones ("huawei").
+_VENDOR_RULES = (
+    # Consumer / SOHO Routers & Desktop Switches (教研室高频)
+    (("huawei device",), "Huawei (华为终端/路由)", "soho_router"),
+    (("honor device",), "HONOR (荣耀)", "soho_router"),
+    (("tp-link", "tplink"), "TP-LINK (普联)", "soho_router"),
+    (("xiaomi", "mi wifi", "redmi"), "Xiaomi (小米/红米)", "soho_router"),
+    (("mercury",), "MERCURY (水星)", "soho_router"),
+    (("shenzhen fast", "fast technologies"), "FAST (迅捷)", "soho_router"),
+    (("tenda",), "Tenda (腾达)", "soho_router"),
+    (("asustek", "asus "), "ASUS (华硕)", "soho_router"),
+    (("d-link",), "D-Link (友讯)", "soho_router"),
+    (("netgear",), "NETGEAR (网件)", "soho_router"),
+    (("totolink", "zioncom"), "TOTOLINK", "soho_router"),
+    (("linksys", "belkin"), "Linksys", "soho_router"),
+    (("phicomm", "feixun"), "Phicomm (斐讯)", "soho_router"),
+    (("shenzhen bilian", "lb-link"), "LB-LINK (必联)", "soho_router"),
+    (("netcore", "netis"), "Netcore (磊科)", "soho_router"),
+    (("shenzhen gongjin", "t&w"), "共进/T&W (代工路由)", "soho_router"),
+    (("hiwifi", "geewifi"), "极路由 (HiWiFi)", "soho_router"),
+    (("qihoo", "360 "), "360 路由", "soho_router"),
+    (("gl technologies", "gl.inet"), "GL.iNet 路由", "soho_router"),
+    (("mercusys",), "Mercusys (水星海外)", "soho_router"),
+    (("cudy",), "Cudy 路由", "soho_router"),
+    (("edimax",), "Edimax", "soho_router"),
+    (("buffalo",), "Buffalo", "soho_router"),
+    (("china mobile", "cmcc"), "中国移动 (光猫/路由)", "soho_router"),
+    (("china telecom", "tianyi"), "中国电信 (天翼/光猫)", "soho_router"),
+    (("china unicom",), "中国联通 (光猫/路由)", "soho_router"),
+    # Enterprise Managed Switches / APs (机房/弱电间常见)
+    (("huawei",), "Huawei (华为)", "switch"),
+    (("new h3c", "hangzhou h3c", "h3c "), "H3C (新华三)", "switch"),
+    (("ruijie",), "Ruijie (锐捷)", "switch"),
+    (("cisco",), "Cisco (思科)", "switch"),
+    (("zte ", "zte corporation"), "ZTE (中兴)", "switch"),
+    (("aruba", "hewlett packard enterprise"), "HPE / Aruba", "switch"),
+    (("juniper",), "Juniper", "switch"),
+    (("digital china", "dcnetworks"), "神州数码 (DCN)", "switch"),
+    (("maipu",), "迈普 (Maipu)", "switch"),
+    (("raisecom",), "瑞斯康达 (Raisecom)", "switch"),
+    (("bdcom", "baud data"), "博达 (BDCOM)", "switch"),
+    (("fiberhome",), "烽火 (FiberHome)", "switch"),
+    (("sangfor",), "深信服 (Sangfor)", "switch"),
+    (("ubiquiti",), "Ubiquiti (UBNT)", "switch"),
+    (("mikrotik", "routerboard"), "MikroTik", "switch"),
+    (("fortinet",), "Fortinet (飞塔)", "switch"),
+    (("extreme networks",), "Extreme", "switch"),
+    (("brocade", "ruckus"), "Ruckus / Brocade", "switch"),
+    (("allied telesis",), "Allied Telesis", "switch"),
+    (("sundray",), "信锐 (Sundray)", "switch"),
+    # Cameras / IoT
+    (("hikvision",), "Hikvision (海康威视)", "iot"),
+    (("dahua",), "Dahua (大华)", "iot"),
+    (("uniview",), "Uniview (宇视)", "iot"),
+    (("ezviz",), "萤石 (EZVIZ)", "iot"),
+    (("espressif",), "Espressif (乐鑫 IoT)", "iot"),
+    (("tuya",), "Tuya (涂鸦 IoT)", "iot"),
+    # Common Endpoints / Computers / Phones
+    (("apple",), "Apple", "endpoint"),
+    (("intel ", "intel corporate"), "Intel", "endpoint"),
+    (("realtek",), "Realtek", "endpoint"),
+    (("dell ", "dell inc"), "Dell (戴尔)", "endpoint"),
+    (("lenovo", "lcfc(hefei)"), "Lenovo (联想)", "endpoint"),
+    (("hp inc", "hewlett packard"), "HP (惠普)", "endpoint"),
+    (("samsung",), "Samsung (三星)", "endpoint"),
+    (("vivo mobile",), "vivo", "endpoint"),
+    (("guangdong oppo", "oppo "), "OPPO", "endpoint"),
+    (("oneplus",), "OnePlus (一加)", "endpoint"),
+    (("microsoft",), "Microsoft", "endpoint"),
+    (("vmware",), "VMware 虚拟网卡", "endpoint"),
+    (("asix electronics",), "ASIX USB网卡", "endpoint"),
 )
-_SWITCH_KEYWORDS = (
-    "huawei", "h3c", "new h3c", "ruijie", "cisco", "zte", "aruba", "juniper",
-    "mikrotik", "ubiquiti", "hewlett packard enterprise", "brocade", "extreme",
-    "maipu", "bdcom", "digital china", "dcnetworks",
-)
+
+
+def _classify_vendor(raw_name: str) -> Tuple[str, str]:
+    """Map an IEEE registry vendor string to a friendly display name and device category."""
+    clean = raw_name.strip()
+    low = clean.lower()
+    for keywords, label, cat in _VENDOR_RULES:
+        if any(k in low for k in keywords):
+            return label, cat
+    return clean, "endpoint"
 
 
 def normalize_mac(mac: str) -> str:
@@ -427,11 +504,33 @@ def normalize_mac(mac: str) -> str:
 
 
 def _load_external_oui() -> None:
-    """Load optional IEEE oui.txt if placed next to this module."""
+    """Load bundled compressed IEEE MA-L/MA-M/MA-S OUI registry (+ optional external oui.txt)."""
     global _EXTERNAL_LOADED
     if _EXTERNAL_LOADED:
         return
     _EXTERNAL_LOADED = True
+
+    # 1. Bundled 58,000+ official IEEE OUI table (works from source & inside PyInstaller bundles)
+    gz_candidates = [
+        resource_path("loopfinder", "data", "oui_ieee.tsv.gz"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "oui_ieee.tsv.gz"),
+    ]
+    for gz_path in gz_candidates:
+        if not os.path.isfile(gz_path):
+            continue
+        try:
+            with gzip.open(gz_path, "rt", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if "\t" not in line:
+                        continue
+                    key, val = line.rstrip("\r\n").split("\t", 1)
+                    if key and val:
+                        _IEEE_DB[key] = val
+            break
+        except OSError:
+            pass
+
+    # 2. Optional user-supplied plain oui.txt override
     here = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(here, "oui.txt"),
@@ -446,21 +545,18 @@ def _load_external_oui() -> None:
                     m = re.match(r"^([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2})\s+\(hex\)\s+(.+)$", line)
                     if not m:
                         continue
-                    prefix = f"{m.group(1)}:{m.group(2)}:{m.group(3)}".upper()
-                    if prefix in OUI_DB:
-                        continue
-                    vendor = m.group(4).strip()
-                    low = vendor.lower()
-                    if any(k in low for k in _SOHO_KEYWORDS):
-                        cat = "soho_router"
-                    elif any(k in low for k in _SWITCH_KEYWORDS):
-                        cat = "switch"
-                    else:
-                        cat = "endpoint"
-                    OUI_DB[prefix] = (vendor, cat)
+                    key = f"{m.group(1)}{m.group(2)}{m.group(3)}".upper()
+                    if key not in _IEEE_DB:
+                        _IEEE_DB[key] = m.group(4).strip()
         except OSError:
             pass
         break
+
+
+def oui_database_size() -> int:
+    """Return total number of loaded offline OUI prefixes (curated + bundled IEEE)."""
+    _load_external_oui()
+    return len(_IEEE_DB) + len(OUI_DB)
 
 
 def lookup_mac_vendor(mac: str) -> Dict[str, str]:
@@ -475,15 +571,43 @@ def lookup_mac_vendor(mac: str) -> Dict[str, str]:
         }
     if norm == "FF:FF:FF:FF:FF:FF":
         return {"vendor": "以太网广播", "category": "local", "category_label": "广播地址"}
-    prefix = norm[:8]
-    if prefix in OUI_DB:
-        vendor, cat = OUI_DB[prefix]
+
+    hex_clean = norm.replace(":", "")
+    prefix24 = norm[:8]
+
+    # 1. Most specific IEEE MA-S (/36) and MA-M (/28) prefixes first
+    for plen in (9, 7):
+        if len(hex_clean) >= plen:
+            raw_ieee = _IEEE_DB.get(hex_clean[:plen])
+            if raw_ieee:
+                vendor, cat = _classify_vendor(raw_ieee)
+                return {
+                    "vendor": vendor,
+                    "category": cat,
+                    "category_label": CATEGORY_LABELS.get(cat, "未知设备"),
+                }
+
+    # 2. Hand-curated Chinese campus OUI priority table (24-bit)
+    if prefix24 in OUI_DB:
+        vendor, cat = OUI_DB[prefix24]
         return {
             "vendor": vendor,
             "category": cat,
             "category_label": CATEGORY_LABELS.get(cat, "未知设备"),
         }
-    # Check locally administered bit (bit 1 of first octet)
+
+    # 3. Full bundled IEEE MA-L (/24) registry (40,000+ prefixes)
+    if len(hex_clean) >= 6:
+        raw_ieee = _IEEE_DB.get(hex_clean[:6])
+        if raw_ieee:
+            vendor, cat = _classify_vendor(raw_ieee)
+            return {
+                "vendor": vendor,
+                "category": cat,
+                "category_label": CATEGORY_LABELS.get(cat, "未知设备"),
+            }
+
+    # 4. Multicast / locally administered MAC check
     try:
         first_byte = int(norm[:2], 16)
         if first_byte & 0x01:
@@ -495,7 +619,7 @@ def lookup_mac_vendor(mac: str) -> Dict[str, str]:
     except ValueError:
         pass
     return {
-        "vendor": f"未知厂商 ({prefix})",
+        "vendor": f"未知厂商 ({prefix24})",
         "category": "unknown",
         "category_label": CATEGORY_LABELS["unknown"],
     }

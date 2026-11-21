@@ -143,6 +143,9 @@ async function loadSystem() {
   const data = await apiGet("/api/system");
   state.system = data;
   $("appVersion").textContent = `v${data.version}`;
+  if (Array.isArray(data.trusted_dhcp_ips)) {
+    $("trustedDhcpInput").value = data.trusted_dhcp_ips.join(", ");
+  }
 
   const sel = $("ifaceSelect");
   sel.innerHTML = "";
@@ -457,9 +460,17 @@ function renderDhcpList(servers) {
     wrap.innerHTML = `<div class="empty-hint">暂未捕获到 DHCP/ARP 异常路由器，可点击上方「📡 扫私接路由」主动探测。</div>`;
     return;
   }
+  const savedTrusted = new Set(state.snap?.trusted_dhcp_ips || []);
   wrap.innerHTML = `<table>
-    <thead><tr><th>判定</th><th>网关 IP</th><th>MAC 地址</th><th>厂商</th><th>识别型号(Web)</th><th>来源/下发IP</th></tr></thead>
-    <tbody>${servers.map((s) => `
+    <thead><tr><th>判定</th><th>网关 IP</th><th>MAC 地址</th><th>厂商</th><th>识别型号(Web)</th><th>来源/下发IP</th><th>操作</th></tr></thead>
+    <tbody>${servers.map((s) => {
+      const isInUserList = savedTrusted.has(s.server_ip);
+      const actionBtn = s.is_rogue
+        ? `<button class="btn btn-xs btn-outline dhcp-trust-btn" data-ip="${esc(s.server_ip)}" data-action="trust" title="如果这是学校/办公室合法路由器，点此加入白名单并永久记住">✓ 设为合法</button>`
+        : (isInUserList
+          ? `<button class="btn btn-xs btn-ghost dhcp-trust-btn" data-ip="${esc(s.server_ip)}" data-action="untrust" title="从合法白名单移除">移出</button>`
+          : `<span class="muted-sm">演练合法</span>`);
+      return `
       <tr>
         <td>${s.is_rogue ? `<span class="pill pill-danger">私接非法</span>` : `<span class="pill pill-ok">合法白名单</span>`}</td>
         <td class="mono">${esc(s.server_ip)}</td>
@@ -467,8 +478,32 @@ function renderDhcpList(servers) {
         <td>${esc(s.vendor)}</td>
         <td><strong>${esc(s.model_hint || s.web_title || "-")}</strong></td>
         <td class="mono">${esc(s.offered_ip || "-")}</td>
-      </tr>`).join("")}
+        <td>${actionBtn}</td>
+      </tr>`;
+    }).join("")}
     </tbody></table>`;
+
+  wrap.querySelectorAll(".dhcp-trust-btn").forEach((btn) => {
+    btn.onclick = async () => {
+      const targetIp = btn.dataset.ip;
+      const action = btn.dataset.action;
+      const cur = (state.snap?.trusted_dhcp_ips || []).slice();
+      const next = action === "trust"
+        ? (cur.includes(targetIp) ? cur : [...cur, targetIp])
+        : cur.filter((x) => x !== targetIp);
+      const res = await apiPost("/api/capture/trusted_dhcp", { ips: next });
+      if (res.ok) {
+        const list = res.trusted_dhcp_ips || [];
+        $("trustedDhcpInput").value = list.join(", ");
+        showToast(
+          action === "trust"
+            ? `已将 ${targetIp} 加入合法 DHCP 白名单（重启软件后仍会记住）`
+            : `已将 ${targetIp} 移出合法白名单`,
+          action === "trust" ? "success" : "info",
+        );
+      }
+    };
+  });
 }
 
 function renderDupList(dups) {

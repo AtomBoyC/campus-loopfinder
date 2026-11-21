@@ -401,6 +401,7 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                     "capabilities": check_capabilities(),
                     "interfaces": list_interfaces(),
                     "sensitivity_presets": {k: v["label"] for k, v in SENSITIVITY_PRESETS.items()},
+                    "trusted_dhcp_ips": list(app_ctx.capture.trusted_dhcp_ips),
                     "sample_cli": SAMPLE_CLI_OUTPUT,
                 })
             if path == "/api/state":

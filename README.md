@@ -1,6 +1,6 @@
 # LoopFinder · 校园网教研室与弱电间环路快速定位仪
 
-![Version](https://img.shields.io/badge/version-2.3.0-blue)
+![Version](https://img.shields.io/badge/version-2.3.1-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9%2B-green)
 ![Offline](https://img.shields.io/badge/mode-100%25%20Offline-orange)

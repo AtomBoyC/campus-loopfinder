@@ -590,5 +590,77 @@ Interface : GigabitEthernet 0/1
             server.server_close()
 
 
+    def test_v231_full_ieee_oui_router_fingerprint_and_dhcp_whitelist_persistence(self) -> None:
+        from loopfinder.core.rogue_router import (
+            infer_brand_from_dhcp,
+            parse_huawei_deviceinfo,
+            parse_xiaomi_init_info,
+        )
+        from loopfinder.data.oui_vendors import oui_database_size
+
+        # 1. Bundled 58k+ IEEE OUI database resolves Huawei Device (34:D6:93) offline
+        self.assertGreater(oui_database_size(), 50000)
+        hw = lookup_mac_vendor("34:D6:93:3A:F5:D7")
+        self.assertIn("Huawei", hw["vendor"])
+        self.assertEqual(hw["category"], "soho_router")
+
+        # 2. Router JSON & DHCP brand fingerprinting
+        self.assertIn(
+            "HUAWEI WiFi AX3",
+            parse_huawei_deviceinfo(b'{"FriendlyName":"HUAWEI WiFi AX3","ModelName":"WS7200"}'),
+        )
+        self.assertIn(
+            "R3600",
+            parse_xiaomi_init_info(b'{"hardware":"R3600","routername":"Xiaomi_AX3600"}'),
+        )
+        self.assertIn("Huawei", infer_brand_from_dhcp(domain_name="homerouter.cpe"))
+        self.assertIn("TP-LINK", infer_brand_from_dhcp(domain_name="tplinkwifi.net"))
+
+        # 3. DHCP whitelist defaults clean, persists across restarts, and updates status immediately
+        with tempfile.TemporaryDirectory() as d:
+            settings_file = os.path.join(d, "settings.json")
+            ledger = PortLedger(storage_path=os.path.join(d, "ledger.json"))
+            ctrl = CaptureController(ledger, settings_path=settings_file)
+            self.assertEqual(ctrl.trusted_dhcp_ips, [])
+
+            # Simulate discovering an office router 192.168.3.1 on a real NIC
+            ctrl.running = True
+            ctrl.backend = "mac_bpf"
+            ctrl._dhcp_servers["192.168.3.1"] = {
+                "server_ip": "192.168.3.1",
+                "server_mac": "34:D6:93:3A:F5:D7",
+                "router_ip": "192.168.3.1",
+                "offered_ip": "192.168.3.9",
+                "subnet_mask": "255.255.255.0",
+                "vendor": hw["vendor"],
+                "category": "soho_router",
+                "category_label": hw["category_label"],
+                "is_rogue": True,
+                "count": 1,
+                "first_seen": time.time(),
+                "last_seen": time.time(),
+                "web_title": "",
+                "model_hint": "",
+                "web_port": "",
+            }
+            ctrl._recompute_status_from_latest()
+            self.assertEqual(ctrl.get_snapshot()["status"], "WARNING")
+
+            ctrl.set_trusted_dhcp(["192.168.3.1"])
+            snap = ctrl.get_snapshot()
+            self.assertEqual(snap["status"], "NORMAL")
+            self.assertFalse(snap["dhcp_servers"][0]["is_rogue"])
+
+            # Reload in a fresh CaptureController -> whitelist persisted
+            ctrl2 = CaptureController(ledger, settings_path=settings_file)
+            self.assertEqual(ctrl2.trusted_dhcp_ips, ["192.168.3.1"])
+
+            # Simulation mode still trusts simulated campus 10.10.1.1 even with empty user list
+            ctrl3 = CaptureController(ledger, settings_path=os.path.join(d, "empty.json"))
+            ctrl3.backend = "simulation"
+            self.assertTrue(ctrl3._is_dhcp_trusted("10.10.1.1"))
+            self.assertFalse(ctrl3._is_dhcp_trusted("192.168.1.1"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

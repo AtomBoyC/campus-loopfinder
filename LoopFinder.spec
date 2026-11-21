@@ -13,6 +13,7 @@ IS_MAC = platform.system() == "Darwin"
 datas = [
     ("loopfinder/web/static", "loopfinder/web/static"),
     ("loopfinder/data/sample_ledger.csv", "loopfinder/data"),
+    ("loopfinder/data/oui_ieee.tsv.gz", "loopfinder/data"),
 ]
 binaries = []
 hiddenimports = [
@@ -125,8 +126,8 @@ elif IS_MAC:
         info_plist={
             "CFBundleName": "LoopFinder",
             "CFBundleDisplayName": "LoopFinder 校园网环路定位仪",
-            "CFBundleShortVersionString": "2.3.0",
-            "CFBundleVersion": "2.3.0",
+            "CFBundleShortVersionString": "2.3.1",
+            "CFBundleVersion": "2.3.1",
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",
             "NSLocalNetworkUsageDescription": "LoopFinder 需要访问本地局域网以检测教研室网络环路并查询弱电间交换机。",

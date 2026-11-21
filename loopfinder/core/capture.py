@@ -10,6 +10,8 @@ Supports three backends seamlessly:
 from __future__ import annotations
 
 import collections
+import json
+import os
 import platform
 import random
 import threading
@@ -23,8 +25,9 @@ from loopfinder.core.packet_parser import (
     build_loop_probe_frame,
     parse_ethernet_frame,
 )
+from loopfinder.core.paths import atomic_write_text, default_data_file
 from loopfinder.core.pcap_writer import build_pcap_bytes
-from loopfinder.core.rogue_router import probe_router_web
+from loopfinder.core.rogue_router import infer_brand_from_dhcp, probe_router_web
 from loopfinder.core.simulator import ClassroomSimulator
 from loopfinder.data.oui_vendors import lookup_mac_vendor, normalize_mac
 
@@ -66,8 +69,9 @@ _SOHO_GATEWAY_IPS = {
 class CaptureController:
     """Thread-safe controller for live L2 loop & rogue router diagnostics."""
 
-    def __init__(self, ledger: PortLedger) -> None:
+    def __init__(self, ledger: PortLedger, settings_path: Optional[str] = None) -> None:
         self.ledger = ledger
+        self.settings_path = settings_path or default_data_file("settings.json")
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
@@ -75,6 +79,7 @@ class CaptureController:
 
         self.running: bool = False
         self.backend: str = "idle"
+        self._last_backend: str = "idle"
         self.interface: str = ""
         self.interface_mac: str = ""
         self.probe_mode: str = "active"  # "passive" | "active"
@@ -92,8 +97,8 @@ class CaptureController:
         self._probe_paused_by_safety: bool = False
         self._expect_tx_self_echo: bool = False
 
-        # Trusted DHCP server whitelist (editable from UI)
-        self.trusted_dhcp_ips: List[str] = ["10.10.1.1"]
+        # Trusted DHCP server whitelist (persisted to ~/.loopfinder/settings.json)
+        self.trusted_dhcp_ips: List[str] = self._load_trusted_dhcp()
         self.sensitivity: str = "standard"
 
         # Rolling PCAP ring buffer for one-click Wireshark export
@@ -196,11 +201,113 @@ class CaptureController:
             self._loop_confidence = 0
             self._reasons = []
 
+    def _load_trusted_dhcp(self) -> List[str]:
+        if not self.settings_path or not os.path.isfile(self.settings_path):
+            return []
+        try:
+            with open(self.settings_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            ips = data.get("trusted_dhcp_ips", [])
+            if isinstance(ips, list):
+                return [str(ip).strip() for ip in ips if str(ip).strip()]
+        except Exception:
+            pass
+        return []
+
+    def _save_trusted_dhcp(self) -> None:
+        if not self.settings_path:
+            return
+        try:
+            data: Dict[str, Any] = {}
+            if os.path.isfile(self.settings_path):
+                try:
+                    with open(self.settings_path, "r", encoding="utf-8") as fh:
+                        loaded = json.load(fh)
+                    if isinstance(loaded, dict):
+                        data = loaded
+                except Exception:
+                    data = {}
+            data["trusted_dhcp_ips"] = list(self.trusted_dhcp_ips)
+            atomic_write_text(
+                self.settings_path,
+                json.dumps(data, ensure_ascii=False, indent=2),
+            )
+        except OSError:
+            pass
+
+    def _is_dhcp_trusted(self, srv_ip: str) -> bool:
+        if srv_ip in self.trusted_dhcp_ips:
+            return True
+        # Simulation mode treats simulated campus DHCP 10.10.1.1 as legitimate automatically
+        if self.backend == "simulation" and srv_ip == "10.10.1.1":
+            return True
+        return False
+
+    def _recompute_status_from_latest(self) -> None:
+        """Re-evaluate current loop status/confidence immediately (e.g. after DHCP whitelist change)."""
+        if not self.running:
+            return
+        latest = self._history[-1] if self._history else {
+            "broadcast_pps": 0.0,
+            "dup_pps": 0.0,
+            "dup_ratio": 0.0,
+            "arp_pps": 0.0,
+        }
+        preset = SENSITIVITY_PRESETS.get(self.sensitivity, SENSITIVITY_PRESETS["standard"])
+        bcast_pps = float(latest.get("broadcast_pps", 0.0))
+        dup_pps = float(latest.get("dup_pps", 0.0))
+        dup_ratio = float(latest.get("dup_ratio", 0.0))
+        arp_pps = float(latest.get("arp_pps", 0.0))
+        score = 0
+        reasons: List[str] = []
+        if self._probe_echo_recent > 0:
+            score += 65
+            reasons.append(f"主动二层探针回环 (近2秒回环 {self._probe_echo_recent} 次)")
+        if dup_pps >= preset["dup_high"] or (dup_pps >= preset["dup_warn"] and dup_ratio >= 45.0):
+            score += 50
+            reasons.append(f"重复广播帧爆发 ({dup_pps:.0f} pps，重复占比 {dup_ratio:.0f}%)")
+        elif dup_pps >= max(5, preset["dup_warn"] // 2):
+            score += 20
+            reasons.append(f"出现重复广播帧 ({dup_pps:.0f} pps)")
+        if bcast_pps >= preset["bcast_high"]:
+            score += 45
+            reasons.append(f"严重广播风暴 ({bcast_pps:.0f} pps)")
+        elif bcast_pps >= preset["bcast_warn"]:
+            score += 25
+            reasons.append(f"广播速率异常偏高 ({bcast_pps:.0f} pps)")
+        if arp_pps >= preset["arp_high"]:
+            score += 20
+            reasons.append(f"ARP 风暴 ({arp_pps:.0f} pps)")
+        if self._arp_conflicts:
+            score += 20
+            reasons.append(f"检测到 {len(self._arp_conflicts)} 处 ARP IP/网关冲突")
+        rogue_count = sum(1 for s in self._dhcp_servers.values() if s["is_rogue"])
+        if rogue_count > 0:
+            score += 15
+            reasons.append(f"发现 {rogue_count} 台私接小路由器/非法 DHCP")
+        score = min(100, score)
+        self._loop_confidence = score
+        self._reasons = reasons
+        if score >= 60:
+            self._status = "LOOP_DETECTED"
+        elif score >= 20 or rogue_count > 0:
+            self._status = "WARNING"
+        else:
+            self._status = "NORMAL"
+        self._prev_status = self._status
+
     def set_trusted_dhcp(self, ips: List[str]) -> None:
         with self._lock:
-            self.trusted_dhcp_ips = [ip.strip() for ip in ips if ip.strip()]
+            dedup: List[str] = []
+            for ip in ips:
+                s = str(ip).strip()
+                if s and s not in dedup:
+                    dedup.append(s)
+            self.trusted_dhcp_ips = dedup
+            self._save_trusted_dhcp()
             for srv in self._dhcp_servers.values():
-                srv["is_rogue"] = srv["server_ip"] not in self.trusted_dhcp_ips
+                srv["is_rogue"] = not self._is_dhcp_trusted(srv["server_ip"])
+            self._recompute_status_from_latest()
 
     def set_sensitivity(self, preset: str) -> str:
         with self._lock:
@@ -234,6 +341,9 @@ class CaptureController:
                 }
 
         with self._lock:
+            # Clear stale timeline events when switching between simulation and a real NIC
+            if self._last_backend != "idle" and (self._last_backend == "simulation") != (chosen_backend == "simulation"):
+                self._events.clear()
             self.reset_metrics()
             self._stop_event.clear()
             self.last_error = ""
@@ -244,6 +354,7 @@ class CaptureController:
             )
             self.probe_mode = mode if mode in ("passive", "active") else "active"
             self.backend = chosen_backend
+            self._last_backend = chosen_backend
             self.running = True
             self._started_at = time.time()
             self._status = "NORMAL"
@@ -480,21 +591,27 @@ class CaptureController:
 
     def _probe_rogue_http_async(self, ip: str, is_sim: bool) -> None:
         def worker() -> None:
-            if is_sim and ip == "192.168.1.1":
-                res = {
-                    "title": "TP-LINK 无线路由器 TL-WR886N",
-                    "server": "Router Webserver",
-                    "model_hint": "TP-LINK (TL-WR886N)",
-                    "port": "80",
-                }
+            if is_sim:
+                if ip == "192.168.1.1":
+                    res = {
+                        "title": "TP-LINK 无线路由器 TL-WR886N",
+                        "server": "Router Webserver",
+                        "model_hint": "TP-LINK (TL-WR886N)",
+                        "port": "80",
+                    }
+                else:
+                    res = {"title": "", "server": "", "model_hint": "", "port": ""}
             else:
                 res = probe_router_web(ip, timeout=1.5)
             with self._lock:
                 srv = self._dhcp_servers.get(ip)
                 if srv:
-                    srv["web_title"] = res.get("title") or ""
-                    srv["model_hint"] = res.get("model_hint") or ""
-                    srv["web_port"] = res.get("port") or ""
+                    srv["web_title"] = res.get("title") or srv.get("web_title") or ""
+                    if res.get("model_hint"):
+                        srv["model_hint"] = res["model_hint"]
+                    srv["web_port"] = res.get("port") or srv.get("web_port") or ""
+                    if srv.get("vendor", "").startswith("未知厂商") and srv.get("model_hint"):
+                        srv["vendor"] = srv["model_hint"]
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -639,8 +756,17 @@ class CaptureController:
                 d = pkt["dhcp"]
                 srv_ip = d["server_ip"]
                 if srv_ip and srv_ip != "0.0.0.0":
-                    is_rogue = srv_ip not in self.trusted_dhcp_ips
+                    is_rogue = not self._is_dhcp_trusted(srv_ip)
                     vinfo = lookup_mac_vendor(d["server_mac"])
+                    dhcp_hint = infer_brand_from_dhcp(
+                        domain_name=d.get("domain_name", ""),
+                        host_name=d.get("host_name", ""),
+                        vendor_class=d.get("vendor_class", ""),
+                        sname=d.get("sname", ""),
+                    )
+                    vendor_display = vinfo["vendor"]
+                    if vendor_display.startswith("未知厂商") and dhcp_hint:
+                        vendor_display = dhcp_hint
                     existing = self._dhcp_servers.get(srv_ip)
                     if existing is None:
                         self._dhcp_servers[srv_ip] = {
@@ -649,7 +775,7 @@ class CaptureController:
                             "router_ip": d["router_ip"],
                             "offered_ip": d["offered_ip"],
                             "subnet_mask": d["subnet_mask"],
-                            "vendor": vinfo["vendor"],
+                            "vendor": vendor_display,
                             "category": vinfo["category"],
                             "category_label": vinfo["category_label"],
                             "is_rogue": is_rogue,
@@ -657,18 +783,18 @@ class CaptureController:
                             "first_seen": ts,
                             "last_seen": ts,
                             "web_title": "",
-                            "model_hint": "",
+                            "model_hint": dhcp_hint,
                             "web_port": "",
                         }
                         if is_rogue:
                             self._log_event(
                                 "danger",
-                                f"发现私接小路由器/非法 DHCP：{srv_ip} ({d['server_mac']} / {vinfo['vendor']})，"
+                                f"发现私接小路由器/非法 DHCP：{srv_ip} ({d['server_mac']} / {vendor_display})，"
                                 f"正在分配私网地址 {d['offered_ip']}",
                             )
-                            if srv_ip not in self._web_probed_ips:
-                                self._web_probed_ips.add(srv_ip)
-                                self._probe_rogue_http_async(srv_ip, self.backend == "simulation")
+                        if srv_ip not in self._web_probed_ips:
+                            self._web_probed_ips.add(srv_ip)
+                            self._probe_rogue_http_async(srv_ip, self.backend == "simulation")
                     else:
                         existing["count"] += 1
                         existing["last_seen"] = ts
@@ -710,7 +836,7 @@ class CaptureController:
             self._arp_ip_macs = {k: v for k, v in list(self._arp_ip_macs.items())[-250:]}
 
         # 2. Passive SOHO router LAN gateway exposure (even when router DHCP hasn't answered yet)
-        if sip in _SOHO_GATEWAY_IPS and sip not in self.trusted_dhcp_ips and sip not in self._dhcp_servers:
+        if sip in _SOHO_GATEWAY_IPS and not self._is_dhcp_trusted(sip) and sip not in self._dhcp_servers:
             vinfo = lookup_mac_vendor(smac)
             if vinfo["category"] == "soho_router":
                 self._dhcp_servers[sip] = {
