@@ -277,8 +277,10 @@ def _list_linux_interfaces() -> List[Dict[str, Any]]:
             mac = ""
             state = ""
             try:
-                mac = open(f"{sys_net}/{name}/address").read().strip().upper()
-                state = open(f"{sys_net}/{name}/operstate").read().strip().lower()
+                with open(f"{sys_net}/{name}/address", "r", encoding="utf-8") as fh:
+                    mac = fh.read().strip().upper()
+                with open(f"{sys_net}/{name}/operstate", "r", encoding="utf-8") as fh:
+                    state = fh.read().strip().lower()
             except OSError:
                 pass
             active = state == "up"

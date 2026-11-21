@@ -145,7 +145,7 @@ def _decode_tlv(data: bytes, offset: int) -> Tuple[int, Any, int]:
     val = data[offset : offset + length]
     end = offset + length
 
-    if tag in (TAG_SEQUENCE, PDU_RESPONSE):
+    if tag in (TAG_SEQUENCE, PDU_GET, PDU_GETNEXT, PDU_RESPONSE, PDU_GETBULK):
         items = []
         pos = offset
         while pos < end:
