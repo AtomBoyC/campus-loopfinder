@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")/.."
 
-python3 -m pip install --upgrade pyinstaller pywebview scapy paramiko
+python3 -m pip install --upgrade pyinstaller pywebview scapy paramiko pyserial
 
 python3 -m PyInstaller \
   --noconfirm \

@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from loopfinder import __app_name__, __version__
 from loopfinder.core.capture import SENSITIVITY_PRESETS, CaptureController
+from loopfinder.core.console_inspector import inspect_switch_console, list_serial_ports
 from loopfinder.core.interfaces import check_capabilities, list_interfaces
 from loopfinder.core.inventory import SwitchInventory
 from loopfinder.core.l3_tracer import run_l3_loop_trace
@@ -51,6 +52,7 @@ class AppContext:
         self.last_snmp_ip: str = ""
         self.last_hop_trace: Optional[Dict[str, Any]] = None
         self.last_l3_trace: Optional[Dict[str, Any]] = None
+        self.last_console_result: Optional[Dict[str, Any]] = None
         self.last_ssh_result: Optional[Dict[str, Any]] = None
 
     def save_snmp_scan(self, result: Dict[str, Any]) -> None:
@@ -167,6 +169,17 @@ class AppContext:
                                 f"风险分 {p['risk_score']} | 广播 {p['broadcast_pps']} pps | MAC数 {p['mac_count']} | 原因: {', '.join(p['reasons'])}"
                             )
                     lines.append("")
+
+            if self.last_console_result and self.last_console_result.get("ranked_ports"):
+                cr = self.last_console_result
+                lines.append(f"## Console 串口直连双采样定位 ({cr.get('sys_name')} · {cr.get('vendor')})")
+                lines.append(f"- 结论: {cr.get('summary')}")
+                for rp in cr["ranked_ports"][:5]:
+                    if rp["risk_score"] > 0 or rp["in_broadcast_pps"] > 50:
+                        lines.append(
+                            f"  - `{rp['port']}` ({rp.get('location') or '-'}) | 入向广播 {rp['in_broadcast_pps']} pps | {rp['direction']}"
+                        )
+                lines.append("")
 
             if self.last_l3_trace:
                 lines.append("## 八、三层路由环路探测结果")
@@ -432,6 +445,8 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                 return self._send_bytes(csv_data, "text/csv; charset=utf-8", "campus_switches.csv")
             if path == "/api/syslog/state":
                 return self._send_json(app_ctx.syslog.get_state())
+            if path == "/api/console/ports":
+                return self._send_json({"ports": list_serial_ports()})
             if path == "/api/ledger":
                 return self._send_json({"entries": app_ctx.ledger.list_entries()})
             if path == "/api/ledger/export_csv":
@@ -587,6 +602,23 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                 if res.get("ok"):
                     with app_ctx._lock:
                         app_ctx.last_l3_trace = res
+                return self._send_json(res, status=200 if res.get("ok") else 400)
+            if path == "/api/console/inspect":
+                res = inspect_switch_console(
+                    device=str(body.get("device") or "").strip(),
+                    baudrate=int(body.get("baudrate") or 9600),
+                    vendor=str(body.get("vendor") or "auto").strip(),
+                    username=str(body.get("username") or "").strip(),
+                    password=str(body.get("password") or ""),
+                    enable_password=str(body.get("enable_password") or ""),
+                    switch_ip=str(body.get("switch_ip") or "").strip(),
+                    sample_interval=float(body.get("sample_interval") or 3.0),
+                    ledger=app_ctx.ledger,
+                    simulate=bool(body.get("simulate", False)),
+                )
+                if res.get("ok"):
+                    with app_ctx._lock:
+                        app_ctx.last_console_result = res
                 return self._send_json(res, status=200 if res.get("ok") else 400)
             if path == "/api/ssh/inspect":
                 res = inspect_switch_ssh(

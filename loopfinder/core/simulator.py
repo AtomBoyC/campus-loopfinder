@@ -337,6 +337,14 @@ def simulate_snmp_switch_scan(switch_ip: str, ledger: PortLedger) -> Dict[str, A
         score = min(100, score)
         level = "danger" if score >= 65 else ("warning" if score >= 25 else ("up" if up else "down"))
 
+        out_bcast = round(random.uniform(6200.0, 7400.0), 1) if (up and cpu_pct > 50 and bcast < 100) else round(bcast * 0.35, 1)
+        if bcast >= 300:
+            bcast_dir = "🚨 广播源头灌入 (In高)"
+        elif out_bcast >= 300 and bcast < 80:
+            bcast_dir = "⚪ 受害转发口 (仅Out高)"
+        else:
+            bcast_dir = "正常"
+
         ports.append({
             "if_index": idx,
             "name": pname,
@@ -346,6 +354,8 @@ def simulate_snmp_switch_scan(switch_ip: str, ledger: PortLedger) -> Dict[str, A
             "oper_status": "up" if up else "down",
             "speed_mbps": 1000,
             "broadcast_pps": bcast,
+            "out_broadcast_pps": out_bcast,
+            "broadcast_direction": bcast_dir,
             "multicast_pps": mcast,
             "in_mbps": mbps,
             "errors_delta": err,

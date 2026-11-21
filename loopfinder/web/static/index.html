@@ -23,7 +23,7 @@
       <nav class="main-tabs" role="tablist">
         <button class="tab-btn active" data-tab="field">1. 教研室现场定位</button>
         <button class="tab-btn" data-tab="snmp">2. 弱电间汇聚/接入(SNMP)</button>
-        <button class="tab-btn" data-tab="ops">3. Syslog雷达 &amp; SSH/L3 <span id="syslogTabBadge" class="tab-badge hidden">0</span></button>
+        <button class="tab-btn" data-tab="ops">3. Console直连 &amp; Syslog/SSH <span id="syslogTabBadge" class="tab-badge hidden">0</span></button>
         <button class="tab-btn" data-tab="ledger">4. 台账 · 防环脚本 · 报告</button>
       </nav>
 
@@ -410,9 +410,87 @@
     </main>
 
     <!-- =================================================================== -->
-    <!-- TAB 3: Syslog 实时告警雷达 + 三层路由环路 + 多品牌 SSH/日志解析      -->
+    <!-- TAB 3: Console 串口直连 + Syslog 雷达 + 三层路由 + SSH/日志解析       -->
     <!-- =================================================================== -->
     <main class="tab-panel" id="tab-ops">
+      <!-- Console Direct Serial Auto-Locator -->
+      <section class="card console-card">
+        <div class="card-head">
+          <h3>🔌 Console 串口直连自动定位广播源头口（机房带外神器 · 全网断网/CPU 99% 也能秒连）</h3>
+          <div class="inline-row gap-sm">
+            <button class="btn btn-sm btn-accent" id="btnConsoleSim">✨ 模拟 Console 直连汇聚</button>
+          </div>
+        </div>
+        <p class="muted-sm" style="margin-bottom:10px;">
+          插上 USB 转 RJ45 Console 线后直接点启动：软件自动识别 <strong>华为 / H3C / 锐捷 / 思科 / TP-LINK</strong> 提示符，自动隔 3 秒双采样全机<strong>入向广播计数器</strong>算出差值，直接把广播源头口标红，并同步提取 MAC 漂移与 LLDP 下联楼层交换机！
+        </p>
+
+        <div class="console-grid">
+          <div>
+            <label>Console 串口设备</label>
+            <div class="inline-row">
+              <select id="consolePortSelect"></select>
+              <button class="btn btn-outline btn-sm" id="btnRefreshSerial" title="刷新串口列表">↻</button>
+            </div>
+          </div>
+          <div>
+            <label>波特率</label>
+            <select id="consoleBaud">
+              <option value="9600" selected>9600 (99%交换机默认)</option>
+              <option value="115200">115200</option>
+              <option value="38400">38400</option>
+              <option value="57600">57600</option>
+            </select>
+          </div>
+          <div>
+            <label>交换机品牌</label>
+            <select id="consoleVendor">
+              <option value="auto" selected>自动识别 (推荐)</option>
+              <option value="h3c">新华三 H3C (Comware)</option>
+              <option value="huawei">华为 Huawei (VRP)</option>
+              <option value="ruijie">锐捷 Ruijie (RGOS)</option>
+              <option value="cisco">思科 Cisco (IOS/Catalyst)</option>
+              <option value="tplink">TP-LINK 网管交换机</option>
+            </select>
+          </div>
+          <div>
+            <label>双采样间隔(秒)</label>
+            <input type="number" id="consoleInterval" value="3.0" min="2" max="8" step="0.5" />
+          </div>
+        </div>
+
+        <div class="console-grid-auth" style="margin-top:8px;">
+          <div>
+            <label>可选: 该交换机管理 IP (用于关联教研室台账)</label>
+            <input type="text" id="consoleSwitchIp" placeholder="如 10.10.1.1" />
+          </div>
+          <div>
+            <label>可选: Console 用户名</label>
+            <input type="text" id="consoleUser" placeholder="无密码直接留空" />
+          </div>
+          <div>
+            <label>可选: 登录密码</label>
+            <input type="password" id="consolePass" placeholder="无密码留空" />
+          </div>
+          <div>
+            <label>可选: Enable 密码 (思科/锐捷)</label>
+            <input type="password" id="consoleEnablePass" placeholder="可选" />
+          </div>
+          <div style="align-self:end;">
+            <button class="btn btn-primary btn-sm" id="btnConsoleInspect">⚡ 一键双采样找广播源头口</button>
+          </div>
+        </div>
+
+        <div id="consoleResultArea" class="hidden" style="margin-top:12px;">
+          <div id="consoleSummaryBanner" class="lookup-result" style="margin-bottom:10px;"></div>
+          <div id="consolePortTable" class="table-wrap"></div>
+          <details style="margin-top:10px;">
+            <summary class="muted-sm" style="cursor:pointer;">查看本次 Console 完整原始交互回显</summary>
+            <pre id="consoleRawTranscript" class="code-box"></pre>
+          </details>
+        </div>
+      </section>
+
       <!-- Real-Time Syslog Radar -->
       <section class="card">
         <div class="card-head">

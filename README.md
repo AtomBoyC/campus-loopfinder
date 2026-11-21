@@ -1,6 +1,6 @@
 # LoopFinder · 校园网教研室与弱电间环路快速定位仪
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.1.0-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9%2B-green)
 ![Offline](https://img.shields.io/badge/mode-100%25%20Offline-orange)
@@ -26,9 +26,10 @@
 * **跨品牌零依赖**：通吃华为、新华三 H3C、锐捷、思科、TP-LINK、中兴、Aruba 等混杂环境，支持 SNMPv1 与 `GETNEXT` 自动回退，并读取主流厂商交换机 CPU 利用率。
 * **资产簿 + 一键并发扫全楼**：按教学楼管理不同团体名设备，并发双采样 ~3 秒排出整栋楼广播风暴与实时 MAC 漂移风险榜。
 * **一键自动逐跳顺藤摸瓜**：从核心/汇聚交换机出发，沿 LLDP 自动跨品牌下钻到最末端教研室墙面信息点。
-* **可视化端口矩阵 + MAC 反查物理口**：红/橙/绿/灰直观标注高危环路口与单口下挂多 MAC 的隐蔽小交换机。
+* **可视化端口矩阵 + 入/出向广播方向对比 + MAC 反查物理口**：同时比对入向与出向广播 PPS，一眼区分「广播源头灌入口」与「受害转发口」。
 
-### 3. Syslog 实时雷达 · 三层路由环路 · SSH/Console 日志解析
+### 3. Console 串口直连 · Syslog 实时雷达 · 三层路由环路 · SSH/日志解析
+* **Console 串口直连自动定位（机房带外神器）**：插上 USB 转 Console 线（macOS 零依赖原生 `termios`，Windows 支持 `pyserial`），自动识别华为/H3C/锐捷/思科/TP-LINK 提示符，隔 3 秒双采样入向广播计数器并算差值，**即便全网瘫痪、SNMP/SSH 断联也能一键标红广播源头口 + LLDP 下联交换机**。
 * **Syslog 告警雷达（UDP 1514 / 514）**：被动接收华为 `%LBDT`、H3C `MAC_MOVE`、锐捷 `RLDP`、思科 `MACFLAP_NOTIF` 推送，秒级报警并匹配教研室房间号。
 * **三层路由环路检测**：跨平台 `traceroute` / `tracert` 自动高亮重复跳闭环。
 * **多品牌 SSH 只读巡检 & Console 串口日志一键粘贴解析**。
@@ -85,6 +86,7 @@ sudo python3 app.py
 │   │   ├── snmp.py                  # 纯 Python SNMPv1/v2c、双采样、并发扫楼与自动逐跳追踪
 │   │   ├── inventory.py             # 弱电间多品牌交换机资产簿
 │   │   ├── syslog_listener.py       # 实时被动 UDP Syslog 环路告警雷达
+│   │   ├── console_inspector.py     # 跨平台 Console 串口直连双采样定位广播源头口
 │   │   ├── l3_tracer.py             # 跨平台三层路由环路检测器
 │   │   ├── ssh_inspector.py         # 多品牌 SSH 只读诊断、离线日志解析与防环配置生成器
 │   │   ├── ledger.py                # 交换机端口 ↔ 教研室面板台账

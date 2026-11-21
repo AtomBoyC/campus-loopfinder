@@ -313,9 +313,11 @@ OID_IF_IN_ERRORS = "1.3.6.1.2.1.2.2.1.14"
 OID_IF_NAME = "1.3.6.1.2.1.31.1.1.1.1"
 OID_IF_IN_MCAST = "1.3.6.1.2.1.31.1.1.1.2"
 OID_IF_IN_BCAST = "1.3.6.1.2.1.31.1.1.1.3"
+OID_IF_OUT_BCAST = "1.3.6.1.2.1.31.1.1.1.5"
 OID_IF_HC_IN_OCTETS = "1.3.6.1.2.1.31.1.1.1.6"
 OID_IF_HC_IN_MCAST = "1.3.6.1.2.1.31.1.1.1.8"
 OID_IF_HC_IN_BCAST = "1.3.6.1.2.1.31.1.1.1.9"
+OID_IF_HC_OUT_BCAST = "1.3.6.1.2.1.31.1.1.1.13"
 OID_IF_HIGH_SPEED = "1.3.6.1.2.1.31.1.1.1.15"
 OID_IF_ALIAS = "1.3.6.1.2.1.31.1.1.1.18"
 
@@ -501,6 +503,9 @@ def _poll_counters(client: SnmpV2Client) -> Dict[str, Dict[int, int]]:
     bcast32 = {} if hc_bcast else _to_int_map(OID_IF_IN_BCAST)
     nucast = {} if (hc_bcast or bcast32) else _to_int_map(OID_IF_IN_NUCAST)
 
+    hc_out_bcast = _to_int_map(OID_IF_HC_OUT_BCAST)
+    out_bcast32 = {} if hc_out_bcast else _to_int_map(OID_IF_OUT_BCAST)
+
     hc_mcast = _to_int_map(OID_IF_HC_IN_MCAST)
     mcast32 = {} if hc_mcast else _to_int_map(OID_IF_IN_MCAST)
 
@@ -510,6 +515,8 @@ def _poll_counters(client: SnmpV2Client) -> Dict[str, Dict[int, int]]:
     return {
         "bcast": hc_bcast or bcast32 or nucast,
         "bcast_64": bool(hc_bcast),
+        "out_bcast": hc_out_bcast or out_bcast32,
+        "out_bcast_64": bool(hc_out_bcast),
         "mcast": hc_mcast or mcast32,
         "mcast_64": bool(hc_mcast),
         "octets": hc_oct or oct32,
@@ -685,14 +692,22 @@ def scan_switch_snmp(
         speed_mbps = if_hspeeds.get(idx) or int((if_speeds.get(idx) or 0) / 1_000_000)
 
         b_delta = _counter_delta(c1["bcast"].get(idx), c2["bcast"].get(idx), c1["bcast_64"])
+        ob_delta = _counter_delta(c1["out_bcast"].get(idx), c2["out_bcast"].get(idx), c1["out_bcast_64"])
         m_delta = _counter_delta(c1["mcast"].get(idx), c2["mcast"].get(idx), c1["mcast_64"])
         o_delta = _counter_delta(c1["octets"].get(idx), c2["octets"].get(idx), c1["octets_64"])
         e_delta = _counter_delta(c1["errors"].get(idx), c2["errors"].get(idx), False)
         d_delta = _counter_delta(c1["discards"].get(idx), c2["discards"].get(idx), False)
 
         bcast_pps = round(b_delta / dt, 1)
+        out_bcast_pps = round(ob_delta / dt, 1)
         mcast_pps = round(m_delta / dt, 1)
         in_mbps = round((o_delta * 8.0 / 1_000_000.0) / dt, 2)
+        if bcast_pps >= 300 and bcast_pps >= out_bcast_pps * 0.5:
+            bcast_dir = "🚨 广播源头灌入 (In高)"
+        elif out_bcast_pps >= 300 and bcast_pps < 80:
+            bcast_dir = "⚪ 受害转发口 (仅Out高)"
+        else:
+            bcast_dir = "正常"
         mac_cnt = mac_count_by_if.get(idx, 0)
         lldp = lldp_map.get(idx)
         stp_state = stp_by_if.get(idx, "forwarding" if oper else "disabled")
@@ -737,6 +752,8 @@ def scan_switch_snmp(
             "oper_status": "up" if oper else "down",
             "speed_mbps": speed_mbps,
             "broadcast_pps": bcast_pps,
+            "out_broadcast_pps": out_bcast_pps,
+            "broadcast_direction": bcast_dir,
             "multicast_pps": mcast_pps,
             "in_mbps": in_mbps,
             "errors_delta": e_delta,

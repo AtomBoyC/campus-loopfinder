@@ -13,6 +13,14 @@ import time
 import unittest
 
 from loopfinder.core.capture import CaptureController
+from loopfinder.core.console_inspector import (
+    compute_counter_deltas,
+    inspect_switch_console,
+    list_serial_ports,
+    parse_counters_table,
+    parse_lldp_brief,
+    parse_single_huawei_interface_bcast,
+)
 from loopfinder.core.inventory import SwitchInventory
 from loopfinder.core.l3_tracer import parse_traceroute_output, run_l3_loop_trace
 from loopfinder.core.ledger import PortLedger, normalize_port_name
@@ -418,6 +426,69 @@ class TestV2Enhancements(unittest.TestCase):
         self.assertIn("H3C-3F-Agg-SW01", html_doc)
         md_doc = ctx.build_markdown_report()
         self.assertIn("实时 Syslog 交换机告警", md_doc)
+
+    def test_console_inspector_parsers_and_simulation(self) -> None:
+        # 1. Serial port listing returns a valid list on any OS
+        ports = list_serial_ports()
+        self.assertIsInstance(ports, list)
+
+        # 2. Huawei brief utilization & single-interface broadcast parser
+        hw_brief = """
+        Interface                   PHY   Protocol  InUti OutUti   inErrors  outErrors
+        GigabitEthernet0/0/1        up    up        0.04% 72.10%          0          0
+        GigabitEthernet0/0/14       up    up       84.50% 15.20%         12          0
+        """
+        parsed_hw = parse_counters_table(hw_brief)
+        self.assertAlmostEqual(parsed_hw["GigabitEthernet0/0/14"]["in_uti_pct"], 84.5)
+        self.assertAlmostEqual(parsed_hw["GigabitEthernet0/0/1"]["out_uti_pct"], 72.1)
+
+        hw_single = """
+        GigabitEthernet0/0/14 current state : UP
+        Last 300 seconds input rate 85000000 bits/sec, 9800 packets/sec
+        Input:  99123456 packets, 10200300 bytes
+          Unicast: 12000, Multicast: 45000, Broadcast: 8812345
+        Output: 1200345 packets, 900123 bytes
+          Unicast: 11000, Multicast: 2000, Broadcast: 99123
+        """
+        in_b, out_b = parse_single_huawei_interface_bcast(hw_single)
+        self.assertEqual(in_b, 8812345)
+        self.assertEqual(out_b, 99123)
+
+        # 3. Cisco & Ruijie counter table parsers
+        cisco_txt = """
+        Port            Broadcast   Multicast
+        Gi1/0/1              100         20
+        Gi1/0/14           50000        400
+        """
+        c_parsed = parse_counters_table(cisco_txt)
+        self.assertEqual(c_parsed["Gi1/0/14"]["broadcast"], 50000)
+
+        ruijie_txt = """
+        Interface              InOctets        InUcastPkts     InMcastPkts     InBcastPkts
+        GigabitEthernet0/14    99482110        410200          412000          18429100
+        """
+        r_parsed = parse_counters_table(ruijie_txt)
+        self.assertEqual(r_parsed["GigabitEthernet0/14"]["broadcast"], 18429100)
+
+        # 4. LLDP brief parser
+        lldp_out = "GE1/0/14  HW-3F-East-SW02  GE0/0/24\n"
+        lldp = parse_lldp_brief(lldp_out)
+        self.assertEqual(lldp["GE1/0/14"]["remote_sys"], "HW-3F-East-SW02")
+
+        # 5. End-to-end simulated Console 2-pass inspection
+        res = inspect_switch_console("__SIM_CONSOLE__", switch_ip="10.10.1.1", simulate=True, ledger=PortLedger())
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["ranked_ports"][0]["port"], "GE1/0/14")
+        self.assertGreater(res["ranked_ports"][0]["in_broadcast_pps"], 5000)
+        self.assertIn("源头", res["ranked_ports"][0]["direction"])
+        self.assertEqual(res["ranked_ports"][0]["lldp_neighbor"]["remote_sys"], "HW-3F-East-SW02")
+
+        # 6. SNMP scan includes In/Out broadcast direction verdict
+        snmp_res = scan_switch_snmp("10.10.1.1", simulate=True)
+        p14 = next(p for p in snmp_res["ports"] if p["name"] == "GigabitEthernet1/0/14")
+        p2 = next(p for p in snmp_res["ports"] if p["name"] == "GigabitEthernet1/0/2")
+        self.assertIn("源头", p14["broadcast_direction"])
+        self.assertIn("受害转发口", p2["broadcast_direction"])
 
 
 if __name__ == "__main__":

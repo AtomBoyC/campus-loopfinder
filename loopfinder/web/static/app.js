@@ -133,6 +133,7 @@ function switchTab(tabName) {
   });
   if (tabName === "ledger") loadLedger();
   if (tabName === "snmp") loadInventory();
+  if (tabName === "ops") loadSerialPorts();
 }
 
 /* =========================================================================
@@ -891,10 +892,13 @@ function showPortDetail(sw, p) {
   box.innerHTML = `
     <div class="inline-row" style="justify-content:space-between; flex-wrap:wrap; margin-bottom:6px;">
       <strong>端口详情：<code>${esc(p.name)}</code>（${esc(p.oper_status.toUpperCase())} · STP: ${esc(p.stp_state)}）</strong>
-      <span class="pill ${p.risk_score >= 65 ? "pill-danger" : (p.risk_score >= 25 ? "pill-warn" : "pill-ok")}">环路风险 ${p.risk_score} 分</span>
+      <div class="inline-row gap-xs">
+        ${p.broadcast_direction ? `<span class="pill ${p.broadcast_direction.includes("源头") ? "pill-danger" : "pill-info"}">${esc(p.broadcast_direction)}</span>` : ""}
+        <span class="pill ${p.risk_score >= 65 ? "pill-danger" : (p.risk_score >= 25 ? "pill-warn" : "pill-ok")}">环路风险 ${p.risk_score} 分</span>
+      </div>
     </div>
     <div><strong>台账位置：</strong>${esc(p.location || p.alias || "未录入（可在 Tab 4 补充）")}</div>
-    <div class="mono" style="margin:4px 0;">广播: ${p.broadcast_pps} pps ｜ 组播: ${p.multicast_pps} pps ｜ 入向流量: ${p.in_mbps} Mbps ｜ 丢包/错包: +${p.discards_delta}/${p.errors_delta} ｜ 学习 MAC 数: ${p.mac_count}</div>
+    <div class="mono" style="margin:4px 0;">入向广播: <strong>${p.broadcast_pps} pps</strong> ｜ 出向广播: ${p.out_broadcast_pps ?? "-"} pps ｜ 组播: ${p.multicast_pps} pps ｜ 入向流量: ${p.in_mbps} Mbps ｜ 丢包/错包: +${p.discards_delta}/${p.errors_delta} ｜ 学习 MAC 数: ${p.mac_count}</div>
     ${p.reasons?.length ? `<div style="color:var(--danger);"><strong>异常原因：</strong>${esc(p.reasons.join("；"))}</div>` : ""}
     ${lldpHtml}`;
 
@@ -937,8 +941,92 @@ async function lookupMacOnSwitch(macOverride = null) {
 }
 
 /* =========================================================================
-   Tab 3: Syslog Radar + L3 Routing Loop Tracer + SSH/CLI Parser
+   Tab 3: Console Serial Auto-Locator + Syslog Radar + L3 Tracer + SSH/CLI
    ========================================================================= */
+async function loadSerialPorts() {
+  const sel = $("consolePortSelect");
+  if (!sel) return;
+  try {
+    const res = await apiGet("/api/console/ports");
+    const ports = res.ports || [];
+    sel.innerHTML = "";
+    const simOpt = document.createElement("option");
+    simOpt.value = "__SIM_CONSOLE__";
+    simOpt.textContent = "✨ [仿真演练] 模拟 Console 线直连 H3C 汇聚交换机 (9600 8N1)";
+    sel.appendChild(simOpt);
+
+    ports.forEach((p) => {
+      const opt = document.createElement("option");
+      opt.value = p.device;
+      opt.textContent = `${p.is_usb === "1" ? "🔌" : "📟"} ${p.label}`;
+      sel.appendChild(opt);
+    });
+    const bestUsb = ports.find((p) => p.is_usb === "1");
+    sel.value = bestUsb ? bestUsb.device : "__SIM_CONSOLE__";
+  } catch (e) {}
+}
+
+async function runConsoleInspect(simulate = false) {
+  const device = simulate ? "__SIM_CONSOLE__" : ($("consolePortSelect").value || "").trim();
+  const btn = simulate ? $("btnConsoleSim") : $("btnConsoleInspect");
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = simulate ? "⏳ 模拟双采样中..." : "⏳ Console 双采样采集中...";
+
+  try {
+    const res = await apiPost("/api/console/inspect", {
+      device,
+      baudrate: parseInt($("consoleBaud").value || "9600", 10),
+      vendor: $("consoleVendor").value || "auto",
+      sample_interval: parseFloat($("consoleInterval").value || "3.0"),
+      switch_ip: $("consoleSwitchIp").value.trim(),
+      username: $("consoleUser").value.trim(),
+      password: $("consolePass").value,
+      enable_password: $("consoleEnablePass").value,
+      simulate: simulate || device === "__SIM_CONSOLE__",
+    });
+    if (!res.ok) {
+      showToast(res.error || "Console 串口采集失败", "danger", 5500);
+      return;
+    }
+
+    $("consoleResultArea").classList.remove("hidden");
+    $("consoleSummaryBanner").innerHTML = `
+      <div>
+        <span class="pill pill-info">${esc(res.vendor)}</span>
+        <span class="pill ${res.simulated ? "pill-warn" : "pill-ok"}">${esc(res.port_device)}</span>
+        <strong style="margin-left:6px;">${esc(res.summary)}</strong>
+      </div>`;
+
+    const rows = (res.ranked_ports || []).map((p) => `
+      <tr style="${p.risk_score >= 60 ? "background:rgba(239,68,68,0.12);" : ""}">
+        <td><strong><code>${esc(p.port)}</code></strong><div class="muted-sm">${esc(p.location || "")}</div></td>
+        <td><span class="pill ${p.risk_score >= 60 ? "pill-danger" : (p.risk_score >= 25 ? "pill-warn" : "pill-ok")}">${esc(p.direction)}</span></td>
+        <td class="mono"><strong>${p.in_broadcast_pps} pps</strong></td>
+        <td class="mono">${p.in_uti_pct > 0 || p.out_uti_pct > 0 ? `${p.in_uti_pct}% / ${p.out_uti_pct}%` : `${p.in_total_pps} pps`}</td>
+        <td>${p.lldp_neighbor ? `↘ <strong>${esc(p.lldp_neighbor.remote_sys)}</strong> <code>${esc(p.lldp_neighbor.remote_port)}</code>` : `<span class="muted-sm">直连末端/无LLDP</span>`}</td>
+        <td>${esc((p.reasons || []).join("；") || "正常")}</td>
+      </tr>`).join("");
+
+    $("consolePortTable").innerHTML = `<table>
+      <thead><tr><th>物理端口 / 台账房间</th><th>方向判定</th><th>入向广播 PPS</th><th>入/出利用率或总PPS</th><th>LLDP 下联设备</th><th>诊断依据</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="6" class="empty-hint">未解析到端口计数器表格（可展开下方原始回显检查命令兼容性）</td></tr>`}</tbody>
+    </table>`;
+
+    $("consoleRawTranscript").textContent = res.raw_output || "";
+
+    if (res.parsed_logs && res.parsed_logs.finding_count > 0) {
+      renderCliParsed(res.parsed_logs);
+    }
+    showToast(res.summary, res.ranked_ports?.[0]?.risk_score >= 60 ? "warn" : "success", 5000);
+  } catch (e) {
+    showToast(`Console 请求异常: ${e}`, "danger");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
 function renderSyslogState(sys) {
   const pill = $("syslogStatusPill");
   const badge = $("syslogTabBadge");
@@ -1227,7 +1315,14 @@ function bindEvents() {
     loadInventory();
   };
 
-  // Tab 3 Syslog / L3 / SSH / Parser
+  // Tab 3 Console / Syslog / L3 / SSH / Parser
+  $("btnRefreshSerial").onclick = async () => {
+    await loadSerialPorts();
+    showToast("已刷新本机 Console 串口列表", "info");
+  };
+  $("btnConsoleInspect").onclick = () => runConsoleInspect(false);
+  $("btnConsoleSim").onclick = () => runConsoleInspect(true);
+
   $("btnSyslogStart").onclick = async () => {
     const res = await apiPost("/api/syslog/start", { port: parseInt($("syslogPort").value || "1514", 10) });
     showToast(res.ok ? `Syslog 雷达已启动 (UDP :${res.port})` : res.error, res.ok ? "success" : "danger", 4500);
@@ -1340,6 +1435,7 @@ function bindEvents() {
   bindEvents();
   await loadSystem();
   await loadInventory();
+  await loadSerialPorts();
   await loadLedger();
   await generateHardening();
   connectSSE();

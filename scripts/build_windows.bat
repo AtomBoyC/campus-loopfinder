@@ -3,7 +3,7 @@ chcp 65001 >nul
 REM 将 LoopFinder 打包为 Windows 独立桌面程序 (dist\LoopFinder\LoopFinder.exe)
 cd /d "%~dp0\.."
 
-python -m pip install --upgrade pyinstaller pywebview scapy paramiko
+python -m pip install --upgrade pyinstaller pywebview scapy paramiko pyserial
 
 python -m PyInstaller ^
   --noconfirm ^
