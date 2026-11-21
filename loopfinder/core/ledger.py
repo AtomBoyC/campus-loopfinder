@@ -1,7 +1,7 @@
 """Campus Switch-Port <-> Building/Office/Wall-Jack Ledger Manager.
 
 Normalizes multi-vendor port names (e.g. GigabitEthernet0/0/14, GE0/0/14, Gi0/0/14)
-so SNMP, LLDP, and SSH outputs automatically map to exact school rooms & wall jacks.
+so SNMP, LLDP, Console and Syslog outputs automatically map to exact school rooms & wall jacks.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import json
 import os
 import re
 from typing import Dict, List, Optional
+
+from loopfinder.core.paths import atomic_write_text, default_data_file
 
 
 _PORT_PREFIX_RE = re.compile(
@@ -53,7 +55,7 @@ class PortLedger:
     def __init__(self, storage_path: Optional[str] = None) -> None:
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.sample_csv = os.path.join(base_dir, "data", "sample_ledger.csv")
-        self.storage_path = storage_path or os.path.join(base_dir, "data", "campus_ledger.json")
+        self.storage_path = storage_path or default_data_file("campus_ledger.json")
         self.entries: List[Dict[str, str]] = []
         self._index: Dict[str, Dict[str, str]] = {}
         self.load()
@@ -91,9 +93,7 @@ class PortLedger:
                 self._rebuild_index()
 
     def save(self) -> None:
-        os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
-        with open(self.storage_path, "w", encoding="utf-8") as f:
-            json.dump(self.entries, f, ensure_ascii=False, indent=2)
+        atomic_write_text(self.storage_path, json.dumps(self.entries, ensure_ascii=False, indent=2))
 
     def list_entries(self) -> List[Dict[str, str]]:
         return list(self.entries)

@@ -1,4 +1,4 @@
-/* LoopFinder v2.0 Desktop Console Frontend (100% Offline, Zero External CDNs) */
+/* LoopFinder Desktop Console Frontend (100% Offline, Zero External CDNs) */
 
 const state = {
   system: null,
@@ -941,7 +941,7 @@ async function lookupMacOnSwitch(macOverride = null) {
 }
 
 /* =========================================================================
-   Tab 3: Console Serial Auto-Locator + Syslog Radar + L3 Tracer + SSH/CLI
+   Tab 3: Console Serial Auto-Locator + Syslog Radar + L3 Tracer + CLI Parser
    ========================================================================= */
 async function loadSerialPorts() {
   const sel = $("consolePortSelect");
@@ -1129,7 +1129,7 @@ function renderCliParsed(parsed) {
 }
 
 /* =========================================================================
-   Tab 4: Ledger & Hardening Config Generator
+   Tab 4: Campus Port Ledger
    ========================================================================= */
 async function loadLedger() {
   const res = await apiGet("/api/ledger");
@@ -1162,30 +1162,6 @@ async function loadLedger() {
       }
     };
   });
-}
-
-const VENDOR_PREFIX_DEFAULTS = {
-  huawei: ["GigabitEthernet0/0/", "GigabitEthernet0/0/24"],
-  h3c: ["GigabitEthernet1/0/", "GigabitEthernet1/0/24"],
-  ruijie: ["GigabitEthernet 0/", "GigabitEthernet 0/24"],
-  cisco: ["GigabitEthernet1/0/", "GigabitEthernet1/0/24"],
-  tplink: ["gigabitEthernet 1/0/", "gigabitEthernet 1/0/24"],
-};
-
-async function generateHardening() {
-  const res = await apiPost("/api/ssh/hardening", {
-    vendor: $("hdVendor").value,
-    port_prefix: $("hdPrefix").value.trim(),
-    port_start: parseInt($("hdStart").value || "1", 10),
-    port_end: parseInt($("hdEnd").value || "22", 10),
-    uplink_port: $("hdUplink").value.trim(),
-    syslog_host: $("hdSyslogIp").value.trim(),
-    syslog_port: parseInt($("syslogPort").value || "1514", 10),
-  });
-  if (res.ok) {
-    $("hardeningOutput").textContent = res.config || "";
-    showToast(`已生成 ${res.vendor} 防环加固配置脚本`, "success");
-  }
 }
 
 /* =========================================================================
@@ -1315,7 +1291,7 @@ function bindEvents() {
     loadInventory();
   };
 
-  // Tab 3 Console / Syslog / L3 / SSH / Parser
+  // Tab 3 Console / Syslog / L3 / Parser
   $("btnRefreshSerial").onclick = async () => {
     await loadSerialPorts();
     showToast("已刷新本机 Console 串口列表", "info");
@@ -1352,35 +1328,13 @@ function bindEvents() {
   $("btnParseCli").onclick = async () => {
     const raw_text = $("cliInputText").value;
     if (!raw_text.trim()) return showToast("请先粘贴交换机输出日志", "warn");
-    const res = await apiPost("/api/ssh/parse", { raw_text, switch_ip: $("parseSwitchIp").value.trim() });
+    const res = await apiPost("/api/cli/parse", { raw_text, switch_ip: $("parseSwitchIp").value.trim() });
     if (res.ok) {
       renderCliParsed(res.parsed);
       showToast(res.parsed.summary, "info");
     }
   };
-  $("btnSshInspect").onclick = async () => {
-    const msg = $("sshStatusMsg");
-    msg.textContent = "⏳ 正在连接交换机执行只读诊断命令...";
-    const res = await apiPost("/api/ssh/inspect", {
-      host: $("sshHost").value.trim(),
-      port: parseInt($("sshPort").value || "22", 10),
-      vendor: $("sshVendor").value,
-      username: $("sshUser").value.trim(),
-      password: $("sshPass").value,
-    });
-    if (!res.ok) {
-      msg.textContent = `❌ ${res.error}`;
-      showToast(res.error, "danger", 5000);
-      return;
-    }
-    msg.textContent = `✅ 采集完成 (${res.vendor})`;
-    $("cliInputText").value = res.raw_output || "";
-    $("parseSwitchIp").value = res.host || "";
-    renderCliParsed(res.parsed);
-    showToast(`SSH 采集完成：${res.parsed.summary}`, "success");
-  };
-
-  // Tab 4 Ledger & Hardening
+  // Tab 4 Ledger
   $("btnLedgerAdd").onclick = async () => {
     const res = await apiPost("/api/ledger/upsert", {
       switch_ip: $("lgIp").value,
@@ -1406,25 +1360,6 @@ function bindEvents() {
     }
     ev.target.value = "";
   };
-
-  $("hdVendor").onchange = () => {
-    const pair = VENDOR_PREFIX_DEFAULTS[$("hdVendor").value];
-    if (pair) {
-      $("hdPrefix").value = pair[0];
-      $("hdUplink").value = pair[1];
-    }
-    generateHardening();
-  };
-  $("btnGenHardening").onclick = generateHardening;
-  $("btnCopyHardening").onclick = async () => {
-    const txt = $("hardeningOutput").textContent || "";
-    try {
-      await navigator.clipboard.writeText(txt);
-      showToast("防环加固配置脚本已复制到剪贴板！", "success");
-    } catch {
-      showToast("复制失败，请手动选中文本框复制", "warn");
-    }
-  };
 }
 
 /* =========================================================================
@@ -1437,6 +1372,5 @@ function bindEvents() {
   await loadInventory();
   await loadSerialPorts();
   await loadLedger();
-  await generateHardening();
   connectSSE();
 })();

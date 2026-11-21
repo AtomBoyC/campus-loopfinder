@@ -31,7 +31,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from loopfinder.core.ledger import PortLedger
-from loopfinder.core.ssh_inspector import parse_switch_cli_output
+from loopfinder.core.cli_parser import parse_switch_cli_output
 
 
 # ==============================================================================
@@ -245,6 +245,15 @@ def parse_counters_table(raw_text: str) -> Dict[str, Dict[str, Any]]:
             continue
         low = s.lower()
 
+        # Outbound-direction table (e.g. Cisco/Ruijie `show interfaces counters` second block):
+        # skip its rows entirely, otherwise OUT counters would overwrite IN counters and
+        # a victim forwarding port would be mis-reported as the broadcast source!
+        if ("interface" in low or low.startswith("port ")) and any(
+            k in low for k in ("outoctets", "outucast", "outmcast", "outbcast", "outbroadcast")
+        ):
+            mode = "skip_out"
+            continue
+
         # Detect table header semantics
         if ("interface" in low or low.startswith("port ")) and any(
             k in low for k in ("broadcast", "inbcast", "inuti", "multicast", "total")
@@ -258,6 +267,9 @@ def parse_counters_table(raw_text: str) -> Dict[str, Dict[str, Any]]:
                 mode = "h3c_inbound"
             elif "broadcast" in low and "multicast" in low:
                 mode = "cisco_bcast"
+            continue
+
+        if mode == "skip_out":
             continue
 
         m = _PORT_RE_LINE.match(line)
@@ -325,7 +337,56 @@ def parse_counters_table(raw_text: str) -> Dict[str, Dict[str, Any]]:
                 "errors": nums[3] if len(nums) >= 4 else 0,
             }
 
+    if not ports:
+        ports = _parse_counter_blocks(clean)
     return ports
+
+
+_BLOCK_PORT_RE = re.compile(
+    r"^\s*(?:interface\s*:?\s*)?((?:(?:Ten-?|X)?GigabitEthernet|FastEthernet|Ethernet|GE|XGE|Gi|Fa|Te|Eth)\s*\d+(?:/\d+){1,3})"
+    r"\s*(?:$|is\b|current\b|,)",
+    re.IGNORECASE,
+)
+_BLOCK_KV_RE = re.compile(r"([A-Za-z][A-Za-z ]*?)\s*:\s*(\d+)")
+
+
+def _parse_counter_blocks(clean: str) -> Dict[str, Dict[str, Any]]:
+    """Fallback parser for per-interface `Key : Value` block output (e.g. Ruijie `show interfaces counters`)."""
+    ports: Dict[str, Dict[str, Any]] = {}
+    cur: Optional[Dict[str, Any]] = None
+    section = "in"
+    for line in clean.splitlines():
+        pm = _BLOCK_PORT_RE.match(line)
+        if pm:
+            pname = re.sub(r"\s+", "", pm.group(1))
+            cur = ports.setdefault(pname, {"port": pname, "total": 0, "broadcast": 0, "multicast": 0, "errors": 0})
+            section = "in"
+            continue
+        if cur is None:
+            continue
+        low = line.lower()
+        if "output" in low and ":" not in low.split("output")[0]:
+            section = "out"
+        elif "input" in low and ":" not in low.split("input")[0]:
+            section = "in"
+        for key, val in _BLOCK_KV_RE.findall(line):
+            k = key.strip().lower().replace(" ", "")
+            explicit_in = k.startswith("in")
+            explicit_out = k.startswith("out")
+            if explicit_out or (section == "out" and not explicit_in):
+                continue
+            num = int(val)
+            if "broadcast" in k or "bcast" in k:
+                cur["broadcast"] = num
+            elif "multicast" in k or "mcast" in k:
+                cur["multicast"] = num
+            elif "ucast" in k or "unicast" in k:
+                cur["total"] = cur.get("total", 0) + num
+            elif "error" in k:
+                cur["errors"] = num
+    for p in ports.values():
+        p["total"] = p.get("total", 0) + p.get("broadcast", 0) + p.get("multicast", 0)
+    return {k: v for k, v in ports.items() if v["broadcast"] or v["multicast"] or v["total"]}
 
 
 def parse_single_huawei_interface_bcast(raw_text: str) -> Tuple[int, int]:
@@ -761,7 +822,7 @@ def inspect_switch_console(
         else:
             counter_cmd = {
                 "h3c": "display counters inbound interface",
-                "cisco": "show interfaces counters broadcast",
+                "cisco": "show interfaces counters",
                 "ruijie": "show interfaces counters",
                 "tplink": "show interface counters",
             }.get(vkey, "display counters inbound interface")

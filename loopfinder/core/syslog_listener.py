@@ -15,7 +15,7 @@ import time
 from typing import Any, Deque, Dict, List, Optional
 
 from loopfinder.core.ledger import PortLedger
-from loopfinder.core.ssh_inspector import parse_switch_cli_output
+from loopfinder.core.cli_parser import parse_switch_cli_output
 
 
 _PRI_RE = re.compile(r"^<\d+>")

@@ -47,11 +47,7 @@ from loopfinder.core.snmp import (
     scan_switch_snmp,
     trace_loop_hops,
 )
-from loopfinder.core.ssh_inspector import (
-    SAMPLE_CLI_OUTPUT,
-    generate_hardening_config,
-    parse_switch_cli_output,
-)
+from loopfinder.core.cli_parser import SAMPLE_CLI_OUTPUT, parse_switch_cli_output
 from loopfinder.core.syslog_listener import SyslogRadar
 from loopfinder.data.oui_vendors import lookup_mac_vendor, normalize_mac
 from loopfinder.web.server import AppContext, create_server
@@ -226,7 +222,7 @@ class TestSnmpBerAndMockSwitch(unittest.TestCase):
         self.assertEqual(hit["lldp_neighbor"]["remote_ip"], "10.10.2.12")
 
 
-class TestSshParser(unittest.TestCase):
+class TestCliParser(unittest.TestCase):
     def test_parse_multi_vendor_cli(self) -> None:
         ledger = PortLedger()
         parsed = parse_switch_cli_output(SAMPLE_CLI_OUTPUT, switch_ip="10.10.2.12", ledger=ledger)
@@ -290,8 +286,8 @@ class TestSimulationAndHttpApi(unittest.TestCase):
             snmp_sim = scan_switch_snmp("10.10.1.1", simulate=True, ledger=ctx.ledger)
             ctx.save_snmp_scan(snmp_sim)
             self.assertEqual(len(ctx.get_snmp_history()), 1)
-            report_inproc = ctx.build_markdown_report()
-            self.assertIn("现场环路排查报告", report_inproc)
+            report_inproc = ctx.build_html_report()
+            self.assertIn("故障排查工单报告", report_inproc)
             self.assertIn("H3C-3F-Agg-SW01", report_inproc)
 
             # Verify live HTTP routes when loopback TCP connect is permitted
@@ -318,9 +314,9 @@ class TestSimulationAndHttpApi(unittest.TestCase):
             snap = json.loads(raw)
             self.assertEqual(snap["status"], "LOOP_DETECTED")
 
-            code, report_md = http_req("GET", "/api/report?format=md")
+            code, report_html = http_req("GET", "/api/report")
             self.assertEqual(code, 200)
-            self.assertIn("现场环路排查报告", report_md)
+            self.assertIn("故障排查工单报告", report_html)
         finally:
             ctx.capture.stop()
             ctx.syslog.stop()
@@ -396,7 +392,7 @@ class TestV2Enhancements(unittest.TestCase):
             self.assertEqual(len(mac_trace["hops"]), 3)
             self.assertEqual(mac_trace["hops"][-1]["port"], "GigabitEthernet0/0/14")
 
-    def test_syslog_radar_l3_tracer_hardening_and_html_report(self) -> None:
+    def test_syslog_radar_l3_tracer_and_html_report(self) -> None:
         ctx = AppContext()
         demo = ctx.syslog.inject_demo_alert()
         self.assertTrue(demo["ok"])
@@ -410,22 +406,22 @@ class TestV2Enhancements(unittest.TestCase):
         self.assertTrue(l3_loop["has_loop"])
         self.assertIn("10.10.1.1", l3_loop["loop_ips"])
         self.assertIn("10.10.0.1", l3_loop["loop_ips"])
+        ctx.last_l3_trace = l3_loop
 
         clean = parse_traceroute_output(" 1 10.10.20.1 1.0 ms\n 2 10.10.1.1 2.0 ms\n 3 223.5.5.5 9.0 ms", "223.5.5.5")
         self.assertFalse(clean["has_loop"])
 
-        # Hardening config generator across all 5 vendors
-        for v in ("huawei", "h3c", "ruijie", "cisco", "tplink"):
-            cfg = generate_hardening_config(v, port_start=1, port_end=20, syslog_host="10.10.20.88")
-            self.assertIn("dhcp snooping", cfg["config"].lower())
-
-        # HTML & Markdown reports
+        # Unified HTML report must carry everything the removed Markdown report had
         ctx.save_snmp_scan(scan_switch_snmp("10.10.1.1", simulate=True, ledger=ctx.ledger))
+        ctx.last_console_result = inspect_switch_console("__SIM_CONSOLE__", switch_ip="10.10.1.1", simulate=True, ledger=ctx.ledger)
         html_doc = ctx.build_html_report()
         self.assertIn("<!DOCTYPE html>", html_doc)
         self.assertIn("H3C-3F-Agg-SW01", html_doc)
-        md_doc = ctx.build_markdown_report()
-        self.assertIn("实时 Syslog 交换机告警", md_doc)
+        self.assertIn("实时 Syslog 交换机告警", html_doc)
+        self.assertIn("三层路由环路探测", html_doc)
+        self.assertIn("Console 串口直连定位", html_doc)
+        self.assertIn("漂移 MAC", html_doc)
+        self.assertNotIn("<script", html_doc.split("<body>")[1].replace("window.print()", ""))
 
     def test_console_inspector_parsers_and_simulation(self) -> None:
         # 1. Serial port listing returns a valid list on any OS
@@ -489,6 +485,99 @@ class TestV2Enhancements(unittest.TestCase):
         p2 = next(p for p in snmp_res["ports"] if p["name"] == "GigabitEthernet1/0/2")
         self.assertIn("源头", p14["broadcast_direction"])
         self.assertIn("受害转发口", p2["broadcast_direction"])
+
+
+class TestAuditRegressions(unittest.TestCase):
+    """Regression tests for the bugs found during the v2.2 audit."""
+
+    def test_cisco_dual_in_out_table_does_not_overwrite_inbound(self) -> None:
+        cisco_real = """
+Port            InOctets    InUcastPkts    InMcastPkts    InBcastPkts
+Gi1/0/1         1000000          5000            100            200
+Gi1/0/14       99000000          8000          40000        9000000
+
+Port           OutOctets   OutUcastPkts   OutMcastPkts   OutBcastPkts
+Gi1/0/1       88000000          4000          30000        7000000
+Gi1/0/14        500000           100             10             20
+"""
+        r = parse_counters_table(cisco_real)
+        self.assertEqual(r["Gi1/0/14"]["broadcast"], 9000000)
+        self.assertEqual(r["Gi1/0/1"]["broadcast"], 200)
+
+        # End-to-end: the source port must rank first, the victim port must not
+        r2 = parse_counters_table(cisco_real.replace("9000000", "9030000").replace("        200\n", "        206\n"))
+        ranked = compute_counter_deltas(r, r2, 3.0, {}, set(), "", PortLedger())
+        self.assertEqual(ranked[0]["port"], "Gi1/0/14")
+        self.assertIn("源头", ranked[0]["direction"])
+
+    def test_ruijie_block_format_counters(self) -> None:
+        ruijie_block = """
+Interface : GigabitEthernet 0/14
+  InOctets          : 99482110
+  InUcastPkts       : 410200
+  InMulticastPkts   : 412000
+  InBroadcastPkts   : 18429100
+  OutBroadcastPkts  : 77
+Interface : GigabitEthernet 0/1
+  InOctets          : 1000
+  InUcastPkts       : 10
+  InMulticastPkts   : 2
+  InBroadcastPkts   : 3
+"""
+        r = parse_counters_table(ruijie_block)
+        self.assertEqual(set(r.keys()), {"GigabitEthernet0/14", "GigabitEthernet0/1"})
+        self.assertEqual(r["GigabitEthernet0/14"]["broadcast"], 18429100)
+        self.assertEqual(r["GigabitEthernet0/14"]["multicast"], 412000)
+        self.assertEqual(r["GigabitEthernet0/1"]["broadcast"], 3)
+
+    def test_user_data_stored_outside_code_dir_with_legacy_migration(self) -> None:
+        from loopfinder.core import paths
+
+        with tempfile.TemporaryDirectory() as d:
+            old = os.environ.get("LOOPFINDER_DATA_DIR")
+            os.environ["LOOPFINDER_DATA_DIR"] = os.path.join(d, "lfdata")
+            try:
+                ledger = PortLedger()
+                pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(paths.__file__)))
+                self.assertFalse(ledger.storage_path.startswith(pkg_dir))
+                ledger.upsert({"switch_ip": "10.9.9.9", "port": "GE0/0/1", "room": "测试室"})
+                self.assertTrue(os.path.isfile(os.path.join(d, "lfdata", "campus_ledger.json")))
+                self.assertIn("测试室", PortLedger().format_location("10.9.9.9", "GigabitEthernet0/0/1"))
+
+                inv = SwitchInventory()
+                inv.upsert({"ip": "10.9.9.1", "name": "X"})
+                self.assertTrue(os.path.isfile(os.path.join(d, "lfdata", "campus_switches.json")))
+            finally:
+                if old is None:
+                    os.environ.pop("LOOPFINDER_DATA_DIR", None)
+                else:
+                    os.environ["LOOPFINDER_DATA_DIR"] = old
+
+    def test_api_rejects_cross_site_and_dns_rebinding_requests(self) -> None:
+        server, ctx = create_server(host="127.0.0.1", port=0)
+        try:
+            handler_cls = server.RequestHandlerClass
+            h = handler_cls.__new__(handler_cls)
+
+            h.headers = {"Host": "127.0.0.1:18765", "Content-Type": "application/json"}
+            self.assertTrue(h._is_trusted_request(is_post=True))
+
+            h.headers = {"Host": "localhost:18765", "Origin": "http://localhost:18765", "Content-Type": "application/json"}
+            self.assertTrue(h._is_trusted_request(is_post=True))
+
+            # Simple cross-site form/text POST (no preflight) must be refused
+            h.headers = {"Host": "127.0.0.1:18765", "Content-Type": "text/plain"}
+            self.assertFalse(h._is_trusted_request(is_post=True))
+
+            # Foreign origin
+            h.headers = {"Host": "127.0.0.1:18765", "Origin": "https://evil.example", "Content-Type": "application/json"}
+            self.assertFalse(h._is_trusted_request(is_post=True))
+
+            # DNS rebinding: attacker hostname resolving to 127.0.0.1
+            h.headers = {"Host": "evil.example:18765"}
+            self.assertFalse(h._is_trusted_request(is_post=False))
+        finally:
+            server.server_close()
 
 
 if __name__ == "__main__":

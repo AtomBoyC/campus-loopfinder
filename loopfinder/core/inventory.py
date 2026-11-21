@@ -13,6 +13,8 @@ import json
 import os
 from typing import Dict, List, Optional
 
+from loopfinder.core.paths import atomic_write_text, default_data_file
+
 
 DEFAULT_SAMPLE_SWITCHES: List[Dict[str, str]] = [
     {
@@ -62,8 +64,7 @@ class SwitchInventory:
     """Persistent JSON/CSV inventory of campus managed switches."""
 
     def __init__(self, storage_path: Optional[str] = None) -> None:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.storage_path = storage_path or os.path.join(base_dir, "data", "campus_switches.json")
+        self.storage_path = storage_path or default_data_file("campus_switches.json")
         self.switches: List[Dict[str, str]] = []
         self.load()
 
@@ -80,9 +81,7 @@ class SwitchInventory:
         self.switches = [dict(x) for x in DEFAULT_SAMPLE_SWITCHES]
 
     def save(self) -> None:
-        os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
-        with open(self.storage_path, "w", encoding="utf-8") as f:
-            json.dump(self.switches, f, ensure_ascii=False, indent=2)
+        atomic_write_text(self.storage_path, json.dumps(self.switches, ensure_ascii=False, indent=2))
 
     def list_switches(self, building: str = "") -> List[Dict[str, str]]:
         if not building:

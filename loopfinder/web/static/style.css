@@ -288,7 +288,7 @@ body {
 }
 
 .control-group { display: flex; flex-direction: column; gap: 4px; }
-.control-group label, .form-grid label, .form-grid-compact label, .form-grid-2 label, .form-stack label, .hardening-grid label {
+.control-group label, .form-grid label, .form-grid-compact label, .form-grid-2 label, .form-stack label {
   font-size: 12px;
   color: var(--muted);
   display: block;
@@ -561,7 +561,6 @@ code {
 .form-grid-2 { display: grid; grid-template-columns: 1fr 1.3fr; gap: 8px; }
 .form-stack { display: flex; flex-direction: column; gap: 9px; }
 .inv-form { display: grid; grid-template-columns: 1fr 1.2fr 1fr 0.9fr 0.9fr 0.6fr auto; gap: 7px; }
-.hardening-grid { display: grid; grid-template-columns: 1.1fr 1.2fr 0.6fr 0.6fr 1.2fr 1fr auto; gap: 8px; }
 .console-card { border-color: rgba(59, 130, 246, 0.5); }
 .console-grid { display: grid; grid-template-columns: 1.8fr 1fr 1fr 0.6fr; gap: 8px; }
 .console-grid-auth { display: grid; grid-template-columns: 1.2fr 0.9fr 0.9fr 0.9fr auto; gap: 8px; }
@@ -664,5 +663,5 @@ code {
 @media (max-width: 1100px) {
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .grid-2-wide, .grid-2 { grid-template-columns: 1fr; }
-  .form-grid-compact, .form-grid-2, .inv-form, .ledger-form, .hardening-grid, .console-grid, .console-grid-auth { grid-template-columns: 1fr 1fr; }
+  .form-grid-compact, .form-grid-2, .inv-form, .ledger-form, .console-grid, .console-grid-auth { grid-template-columns: 1fr 1fr; }
 }

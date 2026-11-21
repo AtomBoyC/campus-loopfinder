@@ -34,13 +34,6 @@ def check_capabilities() -> Dict[str, Any]:
     except Exception:
         has_scapy = False
 
-    has_paramiko = False
-    try:
-        import paramiko  # noqa: F401
-        has_paramiko = True
-    except Exception:
-        has_paramiko = False
-
     has_bpf_access = False
     has_npcap = False
     preferred_backend = "simulation"
@@ -85,7 +78,6 @@ def check_capabilities() -> Dict[str, Any]:
         "os_release": platform.release(),
         "is_admin": is_admin(),
         "has_scapy": has_scapy,
-        "has_paramiko": has_paramiko,
         "has_bpf_access": has_bpf_access,
         "has_npcap": has_npcap,
         "can_live_capture": bool(

@@ -1,4 +1,4 @@
-"""Local-only threaded HTTP + SSE API server powering the LoopFinder v2 Desktop UI."""
+"""Local-only threaded HTTP + SSE API server powering the LoopFinder desktop UI."""
 
 from __future__ import annotations
 
@@ -26,13 +26,7 @@ from loopfinder.core.snmp import (
     scan_switch_snmp,
     trace_loop_hops,
 )
-from loopfinder.core.ssh_inspector import (
-    SAMPLE_CLI_OUTPUT,
-    VENDOR_COMMANDS,
-    generate_hardening_config,
-    inspect_switch_ssh,
-    parse_switch_cli_output,
-)
+from loopfinder.core.cli_parser import SAMPLE_CLI_OUTPUT, parse_switch_cli_output
 from loopfinder.core.syslog_listener import SyslogRadar
 
 
@@ -53,7 +47,6 @@ class AppContext:
         self.last_hop_trace: Optional[Dict[str, Any]] = None
         self.last_l3_trace: Optional[Dict[str, Any]] = None
         self.last_console_result: Optional[Dict[str, Any]] = None
-        self.last_ssh_result: Optional[Dict[str, Any]] = None
 
     def save_snmp_scan(self, result: Dict[str, Any]) -> None:
         with self._lock:
@@ -84,130 +77,21 @@ class AppContext:
         snap["syslog"] = self.syslog.get_state()
         return snap
 
-    def build_markdown_report(self) -> str:
+    def build_html_report(self) -> str:
+        """Build the single self-contained printable HTML incident report (print / save as PDF)."""
         snap = self.capture.get_snapshot()
         sys_alerts = self.syslog.get_state().get("alerts", [])
         now_str = time.strftime("%Y-%m-%d %H:%M:%S")
-        lines = [
-            f"# {__app_name__} v{__version__} 现场环路排查报告",
-            f"- **生成时间**: {now_str}",
-            f"- **监测网卡/模式**: `{snap['interface'] or '未启动'}` ({snap['backend']} / {snap['probe_mode']} / 灵敏度: {snap.get('sensitivity', 'standard')})",
-            f"- **当前结论**: **{snap['status']}**（环路置信度 {snap['loop_confidence']}%）",
-            f"- **广播速率峰值**: {snap['peak_broadcast_pps']} pps | 当前广播: {snap['latest']['broadcast_pps']} pps | 重复帧: {snap['latest']['dup_pps']} pps",
-            "",
-        ]
-        if snap["reasons"]:
-            lines.append("## 一、现场判定依据")
-            for r in snap["reasons"]:
-                lines.append(f"- {r}")
-            lines.append("")
-
-        if snap["upstream_switch"]:
-            up = snap["upstream_switch"]
-            lines.append("## 二、自动识别上联交换机 (LLDP/CDP)")
-            lines.append(
-                f"- 设备名: `{up.get('sys_name', '-')}` | 管理IP: `{up.get('mgmt_ip', '-')}` | "
-                f"端口: `{up.get('port_id', '-')}` | VLAN: `{up.get('vlan_id', '-')}` | 台账位置: {up.get('location') or '未录入'}"
-            )
-            lines.append("")
-
-        rogues = [s for s in snap["dhcp_servers"] if s.get("is_rogue")]
-        if rogues:
-            lines.append("## 三、私接小路由器 / 非法 DHCP 清单")
-            for r in rogues:
-                lines.append(
-                    f"- IP `{r['server_ip']}` | MAC `{r['server_mac']}` | 厂商 `{r['vendor']}` | "
-                    f"型号特征 `{r.get('model_hint') or r.get('web_title') or '未知'}` | 分配地址 `{r['offered_ip']}`"
-                )
-            lines.append("")
-
-        if snap.get("arp_conflicts"):
-            lines.append("## 四、ARP IP/网关冲突告警")
-            for c in snap["arp_conflicts"]:
-                lines.append(f"- IP `{c['ip']}` 同时被以下 MAC 宣称: {', '.join(c['vendors'])}")
-            lines.append("")
-
-        if snap["top_talkers"]:
-            lines.append("## 五、异常流量 Top MAC")
-            lines.append("| MAC 地址 | 厂商 | 分类 | 广播包数 | 总包数 | 占比 |")
-            lines.append("|---|---|---|---|---|---|")
-            for t in snap["top_talkers"][:8]:
-                lines.append(
-                    f"| `{t['mac']}` | {t['vendor']} | {t['category_label']} | {t['broadcast']} | {t['packets']} | {t['share_pct']}% |"
-                )
-            lines.append("")
-
-        with self._lock:
-            if self.last_hop_trace and self.last_hop_trace.get("hops"):
-                lines.append("## 六、汇聚 → 接入自动逐跳追踪路径")
-                for h in self.last_hop_trace["hops"]:
-                    lines.append(
-                        f"- 第 {h['hop']} 跳: **{h['sys_name']}** (`{h['switch_ip']}`) 端口 `{h['port']}` "
-                        f"| 广播 {h['broadcast_pps']} pps | 位置: {h.get('location') or '-'} | {h.get('note', '')}"
-                    )
-                lines.append(f"- **最终结论**: {self.last_hop_trace.get('stop_reason', '')}")
-                lines.append("")
-
-            if self.snmp_scans:
-                lines.append("## 七、弱电间网管交换机 SNMP 排查结果")
-                for ip, res in self.snmp_scans.items():
-                    cpu_str = f" · CPU {res['cpu_pct']}%" if res.get("cpu_pct") is not None else ""
-                    lines.append(f"### {res.get('sys_name')} (`{ip}` · {res.get('vendor')}{cpu_str})")
-                    lines.append(f"- 结论: {res.get('summary')}")
-                    if res.get("mac_flaps"):
-                        lines.append("- **实时 MAC 漂移**:")
-                        for f in res["mac_flaps"]:
-                            lines.append(
-                                f"  - `{f['mac']}` ({f['vendor']}): `{f['from_port']}` ({f.get('from_location') or '-'}) "
-                                f"<-> `{f['to_port']}` ({f.get('to_location') or '-'})"
-                            )
-                    if res.get("suspect_ports"):
-                        lines.append("- **高危端口**:")
-                        for p in res["suspect_ports"][:6]:
-                            lines.append(
-                                f"  - `{p['name']}` ({p.get('location') or p.get('alias') or '无台账'}) — "
-                                f"风险分 {p['risk_score']} | 广播 {p['broadcast_pps']} pps | MAC数 {p['mac_count']} | 原因: {', '.join(p['reasons'])}"
-                            )
-                    lines.append("")
-
-            if self.last_console_result and self.last_console_result.get("ranked_ports"):
-                cr = self.last_console_result
-                lines.append(f"## Console 串口直连双采样定位 ({cr.get('sys_name')} · {cr.get('vendor')})")
-                lines.append(f"- 结论: {cr.get('summary')}")
-                for rp in cr["ranked_ports"][:5]:
-                    if rp["risk_score"] > 0 or rp["in_broadcast_pps"] > 50:
-                        lines.append(
-                            f"  - `{rp['port']}` ({rp.get('location') or '-'}) | 入向广播 {rp['in_broadcast_pps']} pps | {rp['direction']}"
-                        )
-                lines.append("")
-
-            if self.last_l3_trace:
-                lines.append("## 八、三层路由环路探测结果")
-                lines.append(f"- 目标 `{self.last_l3_trace.get('target')}`: {self.last_l3_trace.get('summary')}")
-                lines.append("")
-
-        if sys_alerts:
-            lines.append("## 九、实时 Syslog 交换机告警")
-            for a in sys_alerts[:12]:
-                lines.append(
-                    f"- `{a['time_str']}` `{a['source_ip']}` [{a['type']}] {a['title']} "
-                    f"{'(' + a['location'] + ')' if a.get('location') else ''}"
-                )
-            lines.append("")
-
-        if snap["events"]:
-            lines.append("## 十、排障事件时间线")
-            for ev in reversed(snap["events"][:25]):
-                lines.append(f"- `{ev['time_str']}` [{ev['level'].upper()}] {ev['message']}")
-            lines.append("")
-
-        return "\n".join(lines)
-
-    def build_html_report(self) -> str:
-        """Build a clean, self-contained printable HTML incident report for campus ops."""
-        snap = self.capture.get_snapshot()
-        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
         e = html.escape
+        muted = "style='color:#64748b;text-align:center;'"
+
+        def table(headers: List[str], rows: List[List[str]], empty: str) -> str:
+            head = "".join(f"<th>{h}</th>" for h in headers)
+            if rows:
+                body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+            else:
+                body = f"<tr><td colspan='{len(headers)}' {muted}>{empty}</td></tr>"
+            return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
         status_color = {
             "LOOP_DETECTED": "#dc2626",
@@ -216,43 +100,157 @@ class AppContext:
             "IDLE": "#475569",
         }.get(snap["status"], "#475569")
 
+        sections: List[str] = []
+
+        # 1. Field verdict
+        sections.append(
+            "<h2>现场判定依据</h2>"
+            f"<p>{e('；'.join(snap['reasons'])) if snap['reasons'] else '未触发异常告警'}</p>"
+        )
+
+        # 2. Upstream switch
+        up = snap.get("upstream_switch")
+        if up:
+            sections.append(
+                "<h2>自动识别的上联交换机 (LLDP/CDP)</h2>"
+                + table(
+                    ["设备名", "管理 IP", "端口", "VLAN", "台账位置"],
+                    [[
+                        e(str(up.get("sys_name", "-"))),
+                        f"<code>{e(str(up.get('mgmt_ip', '-')))}</code>",
+                        f"<code>{e(str(up.get('port_id', '-')))}</code>",
+                        e(str(up.get("vlan_id", "-"))),
+                        e(up.get("location") or "未录入"),
+                    ]],
+                    "",
+                )
+            )
+
+        # 3. Rogue routers & ARP conflicts
         rogues = [s for s in snap["dhcp_servers"] if s.get("is_rogue")]
-        rogue_rows = "".join(
-            f"<tr><td><code>{e(r['server_ip'])}</code></td><td><code>{e(r['server_mac'])}</code></td>"
-            f"<td>{e(r['vendor'])}</td><td><strong>{e(r.get('model_hint') or r.get('web_title') or '-')}</strong></td>"
-            f"<td><code>{e(r.get('offered_ip') or '-')}</code></td></tr>"
-            for r in rogues
-        ) or "<tr><td colspan='5' style='color:#64748b;text-align:center;'>未检测到私接小路由器 / 非法 DHCP</td></tr>"
+        sections.append(
+            "<h2>私接小路由器 / 非法 DHCP 清单</h2>"
+            + table(
+                ["网关 IP", "MAC 地址", "厂商", "Web 识别型号", "下发地址"],
+                [[
+                    f"<code>{e(r['server_ip'])}</code>",
+                    f"<code>{e(r['server_mac'])}</code>",
+                    e(r["vendor"]),
+                    f"<strong>{e(r.get('model_hint') or r.get('web_title') or '-')}</strong>",
+                    f"<code>{e(r.get('offered_ip') or '-')}</code>",
+                ] for r in rogues],
+                "未检测到私接小路由器 / 非法 DHCP",
+            )
+        )
+        if snap.get("arp_conflicts"):
+            sections.append(
+                "<h2>ARP IP / 网关冲突</h2>"
+                + table(
+                    ["冲突 IP", "宣称该 IP 的 MAC"],
+                    [[f"<code>{e(c['ip'])}</code>" + (" (疑似网关)" if c.get("is_gateway") else ""),
+                      e(" ↔ ".join(c.get("vendors", [])))] for c in snap["arp_conflicts"]],
+                    "",
+                )
+            )
+
+        # 4. Top talkers
+        if snap["top_talkers"]:
+            sections.append(
+                "<h2>广播风暴源 Top MAC</h2>"
+                + table(
+                    ["MAC 地址", "厂商", "分类", "广播包", "总包 (占比)"],
+                    [[f"<code>{e(t['mac'])}</code>", e(t["vendor"]), e(t["category_label"]),
+                      str(t["broadcast"]), f"{t['packets']} ({t['share_pct']}%)"] for t in snap["top_talkers"][:8]],
+                    "",
+                )
+            )
 
         with self._lock:
-            snmp_blocks = []
-            for ip, res in self.snmp_scans.items():
-                cpu_txt = f" · CPU {res['cpu_pct']}%" if res.get("cpu_pct") is not None else ""
-                p_rows = "".join(
-                    f"<tr><td><code>{e(p['name'])}</code></td><td>{e(p.get('location') or p.get('alias') or '-')}</td>"
-                    f"<td><strong>{p['risk_score']}</strong></td><td>{p['broadcast_pps']} pps</td>"
-                    f"<td>{p['mac_count']}</td><td>{e('；'.join(p.get('reasons') or []))}</td></tr>"
-                    for p in (res.get("suspect_ports") or [])[:8]
-                ) or "<tr><td colspan='6' style='color:#64748b;text-align:center;'>未发现高危端口</td></tr>"
-                snmp_blocks.append(
-                    f"<h3>{e(res.get('sys_name', ip))} ({e(ip)} · {e(res.get('vendor', ''))}{e(cpu_txt)})</h3>"
-                    f"<p>{e(res.get('summary', ''))}</p>"
-                    f"<table><thead><tr><th>端口</th><th>教研室台账位置</th><th>风险分</th><th>广播速率</th><th>MAC数</th><th>异常原因</th></tr></thead>"
-                    f"<tbody>{p_rows}</tbody></table>"
-                )
-            hop_html = ""
+            # 5. Hop trace
             if self.last_hop_trace and self.last_hop_trace.get("hops"):
                 hop_items = " → ".join(
                     f"<span class='chip'>{e(h['sys_name'])} <code>{e(h['port'])}</code>"
                     f"{' (' + e(h['location']) + ')' if h.get('location') else ''}</span>"
                     for h in self.last_hop_trace["hops"]
                 )
-                hop_html = f"<section><h2>汇聚 → 接入自动逐跳追踪</h2><div class='hops'>{hop_items}</div><p><strong>结论：</strong>{e(self.last_hop_trace.get('stop_reason', ''))}</p></section>"
+                sections.append(
+                    f"<h2>汇聚 → 接入自动逐跳追踪</h2><div class='hops'>{hop_items}</div>"
+                    f"<p><strong>结论：</strong>{e(self.last_hop_trace.get('stop_reason', ''))}</p>"
+                )
 
-        ev_rows = "".join(
-            f"<tr><td><code>{e(ev['time_str'])}</code></td><td>{e(ev['level'].upper())}</td><td>{e(ev['message'])}</td></tr>"
-            for ev in reversed(snap["events"][:25])
-        ) or "<tr><td colspan='3' style='color:#64748b;text-align:center;'>暂无事件记录</td></tr>"
+            # 6. Console serial result
+            cr = self.last_console_result
+            if cr and cr.get("ranked_ports"):
+                rows = [[
+                    f"<code>{e(rp['port'])}</code>",
+                    e(rp.get("location") or "-"),
+                    e(rp["direction"]),
+                    f"{rp['in_broadcast_pps']} pps",
+                    e(f"{rp['lldp_neighbor']['remote_sys']} ({rp['lldp_neighbor']['remote_port']})") if rp.get("lldp_neighbor") else "-",
+                ] for rp in cr["ranked_ports"][:8] if rp["risk_score"] > 0 or rp["in_broadcast_pps"] > 50]
+                sections.append(
+                    f"<h2>Console 串口直连定位（{e(cr.get('sys_name', ''))} · {e(cr.get('vendor', ''))}）</h2>"
+                    f"<p>{e(cr.get('summary', ''))}</p>"
+                    + table(["端口", "台账位置", "方向判定", "入向广播", "LLDP 下联"], rows, "未发现异常端口")
+                )
+
+            # 7. SNMP scans
+            if self.snmp_scans:
+                blocks = ["<h2>弱电间交换机 SNMP 排查明细</h2>"]
+                for ip, res in self.snmp_scans.items():
+                    cpu_txt = f" · CPU {res['cpu_pct']}%" if res.get("cpu_pct") is not None else ""
+                    blocks.append(
+                        f"<h3>{e(res.get('sys_name', ip))} ({e(ip)} · {e(res.get('vendor', ''))}{e(cpu_txt)})</h3>"
+                        f"<p>{e(res.get('summary', ''))}</p>"
+                    )
+                    if res.get("mac_flaps"):
+                        blocks.append(table(
+                            ["漂移 MAC", "厂商", "端口 A", "端口 B"],
+                            [[f"<code>{e(f['mac'])}</code>", e(f["vendor"]),
+                              f"<code>{e(f['from_port'])}</code> {e(f.get('from_location') or '')}",
+                              f"<code>{e(f['to_port'])}</code> {e(f.get('to_location') or '')}"] for f in res["mac_flaps"]],
+                            "",
+                        ))
+                    blocks.append(table(
+                        ["端口", "教研室台账位置", "风险分", "入向广播", "MAC 数", "异常原因"],
+                        [[f"<code>{e(p['name'])}</code>", e(p.get("location") or p.get("alias") or "-"),
+                          f"<strong>{p['risk_score']}</strong>", f"{p['broadcast_pps']} pps", str(p["mac_count"]),
+                          e("；".join(p.get("reasons") or []))] for p in (res.get("suspect_ports") or [])[:8]],
+                        "未发现高危端口",
+                    ))
+                sections.append("".join(blocks))
+
+            # 8. L3 trace
+            if self.last_l3_trace:
+                sections.append(
+                    "<h2>三层路由环路探测</h2>"
+                    f"<p>目标 <code>{e(str(self.last_l3_trace.get('target')))}</code>：{e(self.last_l3_trace.get('summary', ''))}</p>"
+                )
+
+        # 9. Syslog
+        if sys_alerts:
+            sections.append(
+                "<h2>实时 Syslog 交换机告警</h2>"
+                + table(
+                    ["时间", "交换机", "类型", "告警", "位置"],
+                    [[f"<code>{e(a['time_str'])}</code>", f"<code>{e(a['source_ip'])}</code>", e(a["type"]),
+                      e(a["title"]), e(a.get("location") or "-")] for a in sys_alerts[:15]],
+                    "",
+                )
+            )
+
+        # 10. Timeline
+        sections.append(
+            "<h2>现场诊断时间线</h2>"
+            + table(
+                ["时间", "级别", "事件详情"],
+                [[f"<code>{e(ev['time_str'])}</code>", e(ev["level"].upper()), e(ev["message"])]
+                 for ev in reversed(snap["events"][:25])],
+                "暂无事件记录",
+            )
+        )
+
+        body = "\n".join(f"<section>{s}</section>" for s in sections)
 
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -286,7 +284,7 @@ class AppContext:
   <div class="head">
     <div>
       <h1>{e(__app_name__)} · 故障排查工单报告</h1>
-      <div style="color:#64748b;font-size:13px;margin-top:4px;">生成时间：{e(now_str)} ｜ 监测接口：{e(snap['interface'] or '未启动')} ({e(snap['backend'])})</div>
+      <div style="color:#64748b;font-size:13px;margin-top:4px;">v{e(__version__)} ｜ 生成时间：{e(now_str)} ｜ 监测接口：{e(snap['interface'] or '未启动')} ({e(snap['backend'])})</div>
     </div>
     <div style="text-align:right;">
       <span class="badge">{e(snap['status'])} · 置信度 {snap['loop_confidence']}%</span>
@@ -301,27 +299,7 @@ class AppContext:
     <div class="kpi"><small>发现私接小路由器</small><strong>{len(rogues)} 台</strong></div>
   </div>
 
-  <section>
-    <h2>一、现场判定依据</h2>
-    <p>{e('；'.join(snap['reasons'])) if snap['reasons'] else '未触发异常告警'}</p>
-  </section>
-
-  <section>
-    <h2>二、私接小路由器 / 非法 DHCP 清单</h2>
-    <table><thead><tr><th>网关 IP</th><th>MAC 地址</th><th>厂商</th><th>Web 识别型号</th><th>下发地址</th></tr></thead><tbody>{rogue_rows}</tbody></table>
-  </section>
-
-  {hop_html}
-
-  <section>
-    <h2>三、弱电间网管交换机 SNMP 排查明细</h2>
-    {''.join(snmp_blocks) if snmp_blocks else '<p style="color:#64748b;">本次尚未执行弱电间 SNMP 扫描。</p>'}
-  </section>
-
-  <section>
-    <h2>四、现场诊断时间线</h2>
-    <table><thead><tr><th style="width:90px;">时间</th><th style="width:85px;">级别</th><th>事件详情</th></tr></thead><tbody>{ev_rows}</tbody></table>
-  </section>
+{body}
 </div>
 </body>
 </html>"""
@@ -404,6 +382,8 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                 return
 
         def do_GET(self) -> None:
+            if not self._is_trusted_request(is_post=False):
+                return self._send_json({"ok": False, "error": "Forbidden: untrusted host"}, status=403)
             parsed = urlparse(self.path)
             path = parsed.path
 
@@ -419,7 +399,6 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                     "version": __version__,
                     "capabilities": check_capabilities(),
                     "interfaces": list_interfaces(),
-                    "vendor_profiles": {k: v["label"] for k, v in VENDOR_COMMANDS.items()},
                     "sensitivity_presets": {k: v["label"] for k, v in SENSITIVITY_PRESETS.items()},
                     "sample_cli": SAMPLE_CLI_OUTPUT,
                 })
@@ -453,18 +432,36 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                 csv_data = app_ctx.ledger.export_csv_text().encode("utf-8-sig")
                 return self._send_bytes(csv_data, "text/csv; charset=utf-8", "campus_port_ledger.csv")
             if path == "/api/report":
-                qs = parse_qs(parsed.query)
-                fmt = (qs.get("format") or ["html"])[0].lower()
-                ts_tag = time.strftime("%Y%m%d_%H%M%S")
-                if fmt == "md":
-                    md = app_ctx.build_markdown_report().encode("utf-8")
-                    return self._send_bytes(md, "text/markdown; charset=utf-8", f"LoopFinder_Report_{ts_tag}.md")
                 html_doc = app_ctx.build_html_report().encode("utf-8")
                 return self._send_bytes(html_doc, "text/html; charset=utf-8")
 
             self._send_json({"error": "Not found"}, status=404)
 
+        def _is_trusted_request(self, is_post: bool) -> bool:
+            """Block DNS-rebinding and cross-site requests from arbitrary web pages.
+
+            - Host must be the loopback address we listen on (defeats DNS rebinding).
+            - If the browser sends an Origin, it must be our own loopback origin.
+            - POST bodies must be application/json, which forces a CORS preflight that we never
+              approve, so other sites cannot fire "simple" form/text POSTs at the API.
+            """
+            host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+            if host not in ("127.0.0.1", "localhost", "[::1]"):
+                return False
+            origin = (self.headers.get("Origin") or "").strip().lower()
+            if origin and origin != "null":
+                o_host = urlparse(origin).hostname or ""
+                if o_host not in ("127.0.0.1", "localhost", "::1"):
+                    return False
+            if is_post:
+                ctype = (self.headers.get("Content-Type") or "").lower()
+                if not ctype.startswith("application/json"):
+                    return False
+            return True
+
         def do_POST(self) -> None:
+            if not self._is_trusted_request(is_post=True):
+                return self._send_json({"ok": False, "error": "Forbidden: untrusted origin"}, status=403)
             parsed = urlparse(self.path)
             path = parsed.path
             body = self._read_json()
@@ -620,34 +617,11 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                     with app_ctx._lock:
                         app_ctx.last_console_result = res
                 return self._send_json(res, status=200 if res.get("ok") else 400)
-            if path == "/api/ssh/inspect":
-                res = inspect_switch_ssh(
-                    host=str(body.get("host") or "").strip(),
-                    username=str(body.get("username") or "").strip(),
-                    password=str(body.get("password") or ""),
-                    vendor=str(body.get("vendor") or "huawei"),
-                    port=int(body.get("port") or 22),
-                    ledger=app_ctx.ledger,
-                )
-                if res.get("ok"):
-                    app_ctx.last_ssh_result = res
-                return self._send_json(res, status=200 if res.get("ok") else 400)
-            if path == "/api/ssh/parse":
+            if path == "/api/cli/parse":
                 raw_text = str(body.get("raw_text") or "")
                 sw_ip = str(body.get("switch_ip") or "").strip()
                 parsed = parse_switch_cli_output(raw_text, switch_ip=sw_ip, ledger=app_ctx.ledger)
                 return self._send_json({"ok": True, "parsed": parsed})
-            if path == "/api/ssh/hardening":
-                res = generate_hardening_config(
-                    vendor=str(body.get("vendor") or "huawei"),
-                    port_prefix=str(body.get("port_prefix") or ""),
-                    port_start=int(body.get("port_start") or 1),
-                    port_end=int(body.get("port_end") or 22),
-                    uplink_port=str(body.get("uplink_port") or ""),
-                    syslog_host=str(body.get("syslog_host") or "").strip(),
-                    syslog_port=int(body.get("syslog_port") or 1514),
-                )
-                return self._send_json({"ok": True, **res})
             if path == "/api/ledger/upsert":
                 try:
                     entries = app_ctx.ledger.upsert(body)

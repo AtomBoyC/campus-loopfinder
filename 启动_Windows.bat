@@ -27,7 +27,7 @@ if not exist "%SystemRoot%\System32\Npcap\wpcap.dll" if not exist "%SystemRoot%\
 
 %PY% -c "import scapy" >nul 2>nul
 if errorlevel 1 (
-    echo [提示] 检测到尚未安装可选增强库 scapy/paramiko/pywebview。
+    echo [提示] 检测到尚未安装可选增强库 scapy/pyserial/pywebview。
     echo        如需在 Windows 开启实时抓包与 SSH，可运行: pip install -r requirements.txt
     echo.
 )

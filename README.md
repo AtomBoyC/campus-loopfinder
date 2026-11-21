@@ -1,6 +1,6 @@
 # LoopFinder · 校园网教研室与弱电间环路快速定位仪
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue)
+![Version](https://img.shields.io/badge/version-2.2.0-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9%2B-green)
 ![Offline](https://img.shields.io/badge/mode-100%25%20Offline-orange)
@@ -28,16 +28,16 @@
 * **一键自动逐跳顺藤摸瓜**：从核心/汇聚交换机出发，沿 LLDP 自动跨品牌下钻到最末端教研室墙面信息点。
 * **可视化端口矩阵 + 入/出向广播方向对比 + MAC 反查物理口**：同时比对入向与出向广播 PPS，一眼区分「广播源头灌入口」与「受害转发口」。
 
-### 3. Console 串口直连 · Syslog 实时雷达 · 三层路由环路 · SSH/日志解析
+### 3. Console 串口直连 · Syslog 实时雷达 · 三层路由环路 · 日志解析
 * **Console 串口直连自动定位（机房带外神器）**：插上 USB 转 Console 线（macOS 零依赖原生 `termios`，Windows 支持 `pyserial`），自动识别华为/H3C/锐捷/思科/TP-LINK 提示符，隔 3 秒双采样入向广播计数器并算差值，**即便全网瘫痪、SNMP/SSH 断联也能一键标红广播源头口 + LLDP 下联交换机**。
 * **Syslog 告警雷达（UDP 1514 / 514）**：被动接收华为 `%LBDT`、H3C `MAC_MOVE`、锐捷 `RLDP`、思科 `MACFLAP_NOTIF` 推送，秒级报警并匹配教研室房间号。
 * **三层路由环路检测**：跨平台 `traceroute` / `tracert` 自动高亮重复跳闭环。
-* **多品牌 SSH 只读巡检 & Console 串口日志一键粘贴解析**。
+* **交换机日志一键粘贴解析**：粘贴 SecureCRT/终端里的 MAC 漂移、环路检测、RLDP 输出，自动提取涉事端口、教研室位置与漂移 MAC 厂商。
 
-### 4. 台账 · 防环加固脚本生成 · 工单报告
+### 4. 台账 · 排查报告
 * **交换机端口 ↔ 教研室面板 CSV 台账**（自动归一化 `GE0/0/14` / `GigabitEthernet0/0/14` / `Gi0/0/14`）。
-* **五品牌防环加固脚本一键生成器**（环路检测 + BPDU 保护 + 风暴抑制 + DHCP Snooping + Syslog 推送）。
-* **双格式报告导出**：支持**可打印/另存 PDF 的 HTML 排查报告**与 **Markdown 工单报告**。
+* **一键排查报告**：汇总现场、Console、SNMP、Syslog 全部结果，可直接打印或另存 PDF。
+* **数据存放在用户目录**（`~/.loopfinder/` 或 `%APPDATA%\LoopFinder\`），打包后不丢失、不随代码上传。
 * **100% 离线可用 + 暗色/亮色主题一键切换**（适配昏暗弱电间与强光教研室）。
 
 ---
@@ -88,7 +88,8 @@ sudo python3 app.py
 │   │   ├── syslog_listener.py       # 实时被动 UDP Syslog 环路告警雷达
 │   │   ├── console_inspector.py     # 跨平台 Console 串口直连双采样定位广播源头口
 │   │   ├── l3_tracer.py             # 跨平台三层路由环路检测器
-│   │   ├── ssh_inspector.py         # 多品牌 SSH 只读诊断、离线日志解析与防环配置生成器
+│   │   ├── cli_parser.py            # 多品牌交换机日志解析（MAC 漂移 / 环路检测 / RLDP / 风暴抑制）
+│   │   ├── paths.py                 # 用户数据目录（台账/资产簿）与 sudo 属主修正
 │   │   ├── ledger.py                # 交换机端口 ↔ 教研室面板台账
 │   │   ├── interfaces.py            # 跨平台网卡发现与权限检测
 │   │   └── simulator.py             # 校园网教研室与 3 级弱电间仿真演练引擎

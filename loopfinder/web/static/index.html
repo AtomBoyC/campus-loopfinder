@@ -15,7 +15,7 @@
       <div class="brand">
         <div class="brand-icon" aria-hidden="true">◎</div>
         <div>
-          <div class="brand-title">LoopFinder <span class="badge-ver" id="appVersion">v2.0</span></div>
+          <div class="brand-title">LoopFinder <span class="badge-ver" id="appVersion">v2.2</span></div>
           <div class="brand-sub">校园网大教研室 &amp; 弱电间多品牌交换机环路定位仪</div>
         </div>
       </div>
@@ -23,8 +23,8 @@
       <nav class="main-tabs" role="tablist">
         <button class="tab-btn active" data-tab="field">1. 教研室现场定位</button>
         <button class="tab-btn" data-tab="snmp">2. 弱电间汇聚/接入(SNMP)</button>
-        <button class="tab-btn" data-tab="ops">3. Console直连 &amp; Syslog/SSH <span id="syslogTabBadge" class="tab-badge hidden">0</span></button>
-        <button class="tab-btn" data-tab="ledger">4. 台账 · 防环脚本 · 报告</button>
+        <button class="tab-btn" data-tab="ops">3. Console直连 &amp; Syslog/日志 <span id="syslogTabBadge" class="tab-badge hidden">0</span></button>
+        <button class="tab-btn" data-tab="ledger">4. 台账 · 报告</button>
       </nav>
 
       <div class="topbar-actions">
@@ -34,7 +34,7 @@
           <input type="checkbox" id="soundEnabled" checked />
           <span>🔊 声音雷达</span>
         </label>
-        <a class="btn btn-primary btn-sm" href="/api/report?format=html" target="_blank">🖨️ 打印报告</a>
+        <a class="btn btn-primary btn-sm" href="/api/report" target="_blank">🖨️ 打印报告</a>
       </div>
     </header>
 
@@ -410,7 +410,7 @@
     </main>
 
     <!-- =================================================================== -->
-    <!-- TAB 3: Console 串口直连 + Syslog 雷达 + 三层路由 + SSH/日志解析       -->
+    <!-- TAB 3: Console 串口直连 + Syslog 雷达 + 三层路由 + 日志解析           -->
     <!-- =================================================================== -->
     <main class="tab-panel" id="tab-ops">
       <!-- Console Direct Serial Auto-Locator -->
@@ -505,7 +505,7 @@
           </div>
         </div>
         <p class="muted-sm" style="margin-bottom:10px;">
-          当交换机 CPU 飙高导致 SNMP 难连时，只要提前配置 <code>info-center loghost 运维电脑IP port 1514</code>（或在「防环脚本」Tab 一键生成），交换机一旦触发 <strong>MAC 漂移 / LBDT / RLDP / 风暴抑制</strong>，此处秒级弹窗、自动翻译出教研室房间号并触发声音报警！
+          当交换机 CPU 飙高导致 SNMP 难连时，只要提前配置 <code>info-center loghost 运维电脑IP port 1514</code>，交换机一旦触发 <strong>MAC 漂移 / LBDT / RLDP / 风暴抑制</strong>，此处秒级弹窗、自动翻译出教研室房间号并触发声音报警！
         </p>
         <div id="syslogAlertTable" class="table-wrap">
           <div class="empty-hint">暂无 Syslog 环路告警（可点击右上角「✨ 模拟注入告警」测试）。</div>
@@ -528,60 +528,17 @@
         </div>
       </section>
 
-      <!-- SSH & Offline CLI Parser -->
-      <section class="grid-2">
-        <div class="card">
-          <div class="card-head">
-            <h3>🔐 多品牌交换机 SSH 只读深度巡检</h3>
-          </div>
-          <p class="muted-sm" style="margin-bottom:10px;">仅执行只读诊断命令（如 <code>display mac-address flapping</code>、<code>show rldp</code>），绝不改动设备配置。</p>
-          <div class="form-stack">
-            <div class="inline-row gap-sm">
-              <div class="grow">
-                <label>交换机 IP</label>
-                <input type="text" id="sshHost" placeholder="10.10.2.12" />
-              </div>
-              <div style="width:90px;">
-                <label>端口</label>
-                <input type="number" id="sshPort" value="22" />
-              </div>
-            </div>
-            <div>
-              <label>交换机品牌模板</label>
-              <select id="sshVendor">
-                <option value="huawei">华为 Huawei (VRP)</option>
-                <option value="h3c">新华三 H3C (Comware)</option>
-                <option value="ruijie">锐捷 Ruijie (RGOS)</option>
-                <option value="cisco">思科 Cisco (IOS/Catalyst)</option>
-                <option value="tplink">TP-LINK 网管交换机</option>
-              </select>
-            </div>
-            <div class="inline-row gap-sm">
-              <div class="grow">
-                <label>用户名</label>
-                <input type="text" id="sshUser" placeholder="admin" />
-              </div>
-              <div class="grow">
-                <label>密码</label>
-                <input type="password" id="sshPass" placeholder="••••••" />
-              </div>
-            </div>
-            <button class="btn btn-primary btn-sm" id="btnSshInspect">▶ 执行 SSH 只读采集并解析</button>
-            <div id="sshStatusMsg" class="muted-sm"></div>
-          </div>
+      <!-- Offline CLI Log Parser -->
+      <section class="card">
+        <div class="card-head">
+          <h3>📋 交换机日志一键解析（粘贴 SecureCRT / 终端里的输出）</h3>
+          <button class="btn btn-xs btn-outline" id="btnLoadSampleCli">载入示例华为日志</button>
         </div>
-
-        <div class="card">
-          <div class="card-head">
-            <h3>📋 Console 串口 / 终端日志一键解析</h3>
-            <button class="btn btn-xs btn-outline" id="btnLoadSampleCli">载入示例华为日志</button>
-          </div>
-          <div class="inline-row gap-sm" style="margin-bottom:8px;">
-            <input type="text" id="parseSwitchIp" placeholder="可选：交换机 IP (关联台账房间，如 10.10.2.12)" class="grow" />
-            <button class="btn btn-sm btn-primary" id="btnParseCli">🔍 一键解析</button>
-          </div>
-          <textarea id="cliInputText" rows="8" placeholder="在此粘贴 display mac-address flapping record / display loopback-detect / show rldp / show logging 等输出..."></textarea>
+        <div class="inline-row gap-sm" style="margin-bottom:8px;">
+          <input type="text" id="parseSwitchIp" placeholder="可选：交换机 IP (关联台账房间，如 10.10.2.12)" class="grow" />
+          <button class="btn btn-sm btn-primary" id="btnParseCli">🔍 一键解析</button>
         </div>
+        <textarea id="cliInputText" rows="8" placeholder="在此粘贴 display mac-address flapping record / display loopback-detect / show rldp / show logging 等输出..."></textarea>
       </section>
 
       <section id="cliParsedArea" class="card hidden">
@@ -605,7 +562,7 @@
     </main>
 
     <!-- =================================================================== -->
-    <!-- TAB 4: 教研室面板台账 · 防环加固脚本生成器 · 报告导出                 -->
+    <!-- TAB 4: 教研室面板台账 · 报告导出                                     -->
     <!-- =================================================================== -->
     <main class="tab-panel" id="tab-ledger">
       <section class="card">
@@ -619,7 +576,7 @@
             <a class="btn btn-sm btn-outline" href="/api/ledger/export_csv">📤 导出 CSV</a>
           </div>
         </div>
-        <p class="muted-sm" style="margin-bottom:10px;">录入各弱电间交换机端口对应的教研室与墙面面板号后，LLDP、SNMP、Syslog 和 SSH 解析结果会自动把 <code>GE0/0/14</code> 翻译为 <strong>第一教学楼 · 302大教研室 · 东墙4号信息点</strong>。</p>
+        <p class="muted-sm" style="margin-bottom:10px;">录入各弱电间交换机端口对应的教研室与墙面面板号后，LLDP、SNMP、Console、Syslog 和日志解析结果会自动把 <code>GE0/0/14</code> 翻译为 <strong>第一教学楼 · 302大教研室 · 东墙4号信息点</strong>。</p>
 
         <div class="ledger-form">
           <input type="text" id="lgIp" placeholder="交换机 IP (如 10.10.2.12)" />
@@ -634,59 +591,13 @@
         <div id="ledgerTableWrap" class="table-wrap" style="margin-top:12px;"></div>
       </section>
 
-      <!-- Interactive Hardening Config Generator -->
-      <section class="card">
-        <div class="card-head">
-          <h3>🛡️ 多品牌楼层交换机「防环路 + 防私接路由」加固脚本生成器</h3>
-          <button class="btn btn-sm btn-outline" id="btnCopyHardening">📋 一键复制配置</button>
-        </div>
-        <p class="muted-sm" style="margin-bottom:10px;">排查解决完环路后，直接为该楼层接入交换机生成防环加固配置（含环路检测自动阻塞、BPDU 保护、广播风暴抑制、DHCP Snooping 防小路由器反接 + 可选 Syslog 告警推送）：</p>
-        <div class="hardening-grid">
-          <div>
-            <label>交换机品牌</label>
-            <select id="hdVendor">
-              <option value="huawei">华为 Huawei (VRP)</option>
-              <option value="h3c">新华三 H3C (Comware)</option>
-              <option value="ruijie">锐捷 Ruijie (RGOS)</option>
-              <option value="cisco">思科 Cisco (IOS/Catalyst)</option>
-              <option value="tplink">TP-LINK 网管交换机</option>
-            </select>
-          </div>
-          <div>
-            <label>下联端口前缀</label>
-            <input type="text" id="hdPrefix" value="GigabitEthernet0/0/" />
-          </div>
-          <div>
-            <label>起始口</label>
-            <input type="number" id="hdStart" value="1" min="1" max="48" />
-          </div>
-          <div>
-            <label>结束口</label>
-            <input type="number" id="hdEnd" value="22" min="1" max="48" />
-          </div>
-          <div>
-            <label>上联信任口(放行合法DHCP)</label>
-            <input type="text" id="hdUplink" value="GigabitEthernet0/0/24" />
-          </div>
-          <div>
-            <label>可选: Syslog 接收电脑 IP</label>
-            <input type="text" id="hdSyslogIp" placeholder="如 10.10.20.88" />
-          </div>
-          <div style="align-self:end;">
-            <button class="btn btn-sm btn-primary" id="btnGenHardening">⚡ 生成脚本</button>
-          </div>
-        </div>
-        <pre id="hardeningOutput" class="code-box">点击「⚡ 生成脚本」生成对应品牌防环加固配置...</pre>
-      </section>
-
       <!-- Report Center -->
       <section class="card">
         <div class="card-head">
           <h3>📄 故障排查工单报告 &amp; 抓包取证导出</h3>
         </div>
         <div class="inline-row gap-sm" style="flex-wrap:wrap;">
-          <a class="btn btn-primary" href="/api/report?format=html" target="_blank">🖨️ 打开可打印 HTML 排查报告（支持另存 PDF）</a>
-          <a class="btn btn-outline" href="/api/report?format=md" target="_blank">📝 下载 Markdown 排查报告 (.md)</a>
+          <a class="btn btn-primary" href="/api/report" target="_blank">🖨️ 打开排查报告（可打印 / 另存为 PDF）</a>
           <a class="btn btn-outline" href="/api/capture/pcap">💾 下载现场抓包取证 (.pcap · Wireshark 直接打开)</a>
         </div>
       </section>
