@@ -78,7 +78,16 @@ class SwitchInventory:
                     return
             except Exception:
                 pass
-        self.switches = [dict(x) for x in DEFAULT_SAMPLE_SWITCHES]
+        # Start clean on first launch; sample switches can be loaded on demand for demos
+        self.switches = []
+
+    def load_sample(self) -> List[Dict[str, str]]:
+        by_ip = {s["ip"]: s for s in self.switches}
+        for item in DEFAULT_SAMPLE_SWITCHES:
+            by_ip.setdefault(item["ip"], dict(item))
+        self.switches = list(by_ip.values())
+        self.save()
+        return self.list_switches()
 
     def save(self) -> None:
         atomic_write_text(self.storage_path, json.dumps(self.switches, ensure_ascii=False, indent=2))

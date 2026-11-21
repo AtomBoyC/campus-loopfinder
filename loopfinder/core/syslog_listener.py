@@ -109,7 +109,7 @@ class SyslogRadar:
             except OSError:
                 break
 
-    def ingest_message(self, source_ip: str, raw_msg: str) -> Dict[str, Any]:
+    def ingest_message(self, source_ip: str, raw_msg: str, use_demo_locations: bool = False) -> Dict[str, Any]:
         """Parse a single incoming syslog line and record if it indicates a loop/flap/storm."""
         clean = _PRI_RE.sub("", raw_msg).strip()
         now = time.time()
@@ -130,7 +130,11 @@ class SyslogRadar:
                 self._last_alert_ts = now
                 for f in parsed["findings"]:
                     ports = f.get("ports") or []
-                    locs = [self.ledger.format_location(source_ip, p) for p in ports]
+                    if use_demo_locations:
+                        from loopfinder.core.simulator import demo_location
+                        locs = [demo_location(source_ip, p, self.ledger) for p in ports]
+                    else:
+                        locs = [self.ledger.format_location(source_ip, p) for p in ports]
                     loc_str = " / ".join([x for x in locs if x])
                     self._alerts.appendleft({
                         "ts": now,
@@ -162,7 +166,7 @@ class SyslogRadar:
         ]
         total = 0
         for ip, msg in samples:
-            res = self.ingest_message(ip, msg)
+            res = self.ingest_message(ip, msg, use_demo_locations=True)
             total += res["finding_count"]
         return {"ok": True, "injected": len(samples), "alerts": total}
 

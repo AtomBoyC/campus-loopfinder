@@ -50,8 +50,8 @@ def check_capabilities() -> Dict[str, Any]:
         else:
             preferred_backend = "simulation"
             hint = (
-                "当前无 /dev/bpf 读写权限，实时抓包需使用管理员权限启动（双击 启动_macOS.command 或运行 "
-                "`sudo python3 app.py`），也可先使用「仿真演练模式」或直接进行 SNMP/SSH 弱电间交换机排查。"
+                "当前尚未开启本机有线抓包权限：点击右侧「🔐 一键开启本机抓包权限」输入开机密码即可立刻解锁；"
+                "若只做仿真演练或机房 SNMP / Console 排查，无需授权可直接用。"
             )
     elif system == "Windows":
         npcap_dll = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "Npcap", "wpcap.dll")
@@ -63,15 +63,15 @@ def check_capabilities() -> Dict[str, Any]:
             if not is_admin():
                 hint += "（建议右键「以管理员身份运行」确保所有网卡均可发包）"
         elif not has_npcap:
-            hint = "Windows 实时抓包需安装 Npcap（https://npcap.com/，安装 Wireshark 时也会自带），当前可使用 SNMP/SSH 与仿真模式。"
+            hint = "去教研室实时抓包需安装一次免费驱动 Npcap（安装时勾选 WinPcap 兼容模式）；机房 SNMP、Console 串口直连与仿真演练当前可直接用。"
         else:
-            hint = "Windows 需安装 scapy（运行 `pip install scapy`）以启用实时二层抓包；SNMP/SSH 与仿真模式已可直接运行。"
+            hint = "Windows 源码运行需安装 scapy（运行 `pip install scapy`）以启用实时二层抓包；SNMP / Console 与仿真模式已可直接运行。"
     else:
         if has_scapy and is_admin():
             preferred_backend = "scapy"
             hint = "Linux Scapy Raw Socket 引擎就绪"
         else:
-            hint = "Linux 实时抓包需 root/CAP_NET_RAW 权限与 scapy；SNMP/SSH 与仿真模式已就绪。"
+            hint = "Linux 实时抓包需 root/CAP_NET_RAW 权限与 scapy；SNMP / Console 与仿真模式已就绪。"
 
     return {
         "os": system,
@@ -296,6 +296,37 @@ def _list_linux_interfaces() -> List[Dict[str, Any]]:
                 "label": f"{name} · {'已连接' if active else '未连接'}",
             })
     return interfaces
+
+
+def request_macos_bpf_permission() -> Dict[str, Any]:
+    """Prompt macOS graphical administrator dialog to grant /dev/bpf* rw access to current user's group.
+
+    Uses the same group-permission model as Wireshark's official ChmodBPF helper so
+    beginners using the double-click .app never need to open Terminal or type sudo.
+    """
+    if platform.system() != "Darwin":
+        return {"ok": False, "error": "仅 macOS 支持此一键授权操作"}
+    gid = os.getgid()
+    script = f'do shell script "chgrp {gid} /dev/bpf* && chmod g+rw /dev/bpf*" with administrator privileges'
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=90,
+            check=False,
+        )
+        if proc.returncode != 0:
+            err_txt = proc.stderr.decode("utf-8", errors="ignore").strip()
+            if "canceled" in err_txt.lower() or "-128" in err_txt:
+                return {"ok": False, "error": "已取消管理员授权"}
+            return {"ok": False, "error": f"授权未完成：{err_txt or '请检查管理员密码'}"}
+        caps = check_capabilities()
+        if not caps.get("has_bpf_access"):
+            return {"ok": False, "error": "权限命令已执行，但仍无法读取 /dev/bpf0，请尝试重启软件。"}
+        return {"ok": True, "capabilities": caps, "message": "已成功开启本机有线抓包权限，现在可直接开始监测！"}
+    except Exception as e:
+        return {"ok": False, "error": f"无法弹出 macOS 授权框：{e}"}
 
 
 def list_interfaces() -> List[Dict[str, Any]]:

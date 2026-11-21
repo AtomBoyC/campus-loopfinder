@@ -11,6 +11,7 @@ env/
 build/
 dist/
 *.spec
+!LoopFinder.spec
 
 # OS files
 .DS_Store

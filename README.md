@@ -1,6 +1,6 @@
 # LoopFinder · 校园网教研室与弱电间环路快速定位仪
 
-![Version](https://img.shields.io/badge/version-2.2.0-blue)
+![Version](https://img.shields.io/badge/version-2.3.0-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9%2B-green)
 ![Offline](https://img.shields.io/badge/mode-100%25%20Offline-orange)
@@ -10,9 +10,21 @@
 
 ---
 
-## 👋 新手从这里开始
+## 👋 新手从这里开始（开袋即食，免装 Python）
 
 **一句话说明：** 教研室网络卡死了，带着笔记本插上网线，它告诉你是不是"网线插成了圈"、是不是有人私接路由器插反了，并带你一步步找到是哪根线、哪台路由器。能进机房的话，插上 Console 线还能直接找出风暴是从交换机哪个口进来的。
+
+### 📥 直接下载安装包（推荐，不用装 Python）
+
+前往 👉 **[GitHub Releases 最新版本下载页](https://github.com/AtomBoyC/campus-loopfinder/releases/latest)**，按你的电脑选一个下载：
+
+| 你的电脑 | 下载这个文件 | 怎么打开 |
+|---|---|---|
+| **Windows 10 / 11** | `LoopFinder-Windows-x64.zip` | 解压后双击 **`LoopFinder.exe`**（弹窗点「是」）。机房 SNMP / Console / 演练打开就能用；去教研室实时抓包再装一次免费驱动 [Npcap](https://npcap.com/#download)（勾选 WinPcap 兼容模式）。 |
+| **Mac（M1 / M2 / M3 / M4 芯片）** | `LoopFinder-macOS-AppleSilicon.dmg` | 打开后把 **`LoopFinder.app`** 拖进 Applications。首次如被系统拦截，在终端粘贴执行一次 `xattr -cr /Applications/LoopFinder.app` 即可双击打开；进软件后点顶部 **「🔐 一键开启本机抓包权限」** 即可测教研室。 |
+| **Mac（老款 Intel 芯片）** | `LoopFinder-macOS-Intel.dmg` | 同上（点屏幕左上角 🍎 → 关于本机，看是 Apple 芯片还是 Intel）。 |
+
+### 📖 配套文档
 
 | 我想…… | 看这里 |
 |---|---|
@@ -22,7 +34,7 @@
 | 打印一张随身带的步骤卡 | [《现场速查卡》](docs/现场速查卡.md) |
 | 打不开、连不上、没反应 | [《新手使用手册》第 10 章（常见问题）](docs/使用手册.md#第-10-章--常见问题打不开连不上没反应) |
 
-**最快试用（Mac）：** 下载 ZIP 解压 → 双击 `启动_macOS.command` → 输入 `n` 回车 → 在第 1 页网卡下拉框选「✨ 仿真演练模式」→ 点「▶ 开始监测」。
+**最快试用（1 分钟体验）：** 打开软件 → 在第 1 页网卡下拉框选「✨ 仿真演练模式」→ 点「▶ 开始监测」，不会碰学校真实网络。
 
 ---
 
@@ -56,29 +68,26 @@
 
 ---
 
-## 快速上手（命令行）
+## 从源码运行与自行打包（开发者）
 
 ### macOS（零依赖直接运行）
 ```bash
 # 1. 初次体验：启动内置仿真演练模式（模拟 302 大教研室环路 + 3 级弱电间跨品牌追踪）
 python3 app.py --demo
 
-# 2. 现场真实排障：提权解锁 /dev/bpf* 实时二层抓包与主动探针
+# 2. 现场真实排障：打开后在界面点「一键开启本机抓包权限」，或命令行提权
 sudo python3 app.py
 ```
 也可直接双击 `启动_macOS.command`。
 
-### Windows 10/11
+### Windows 10/11（从源码运行）
 1. 安装 Python 3.9+（勾选 `Add Python to PATH`）与 [Npcap](https://npcap.com/)（勾选 *WinPcap API-compatible Mode*）。
-2. 安装可选依赖：
-   ```bat
-   pip install -r requirements.txt
-   ```
-3. 右键 **以管理员身份运行** `启动_Windows.bat`。
+2. 右键 **以管理员身份运行** `启动_Windows.bat`（首次会自动创建虚拟环境并安装依赖）。
 
-### 打包为独立桌面软件（.app / .exe）
-* **macOS**：`bash scripts/build_macos.sh` → `dist/LoopFinder.app`
-* **Windows**：`scripts\build_windows.bat` → `dist\LoopFinder\LoopFinder.exe`
+### 本地打包为独立桌面软件（.dmg / .exe）
+* **macOS**：`bash scripts/build_macos.sh` → `dist/LoopFinder.app` 与 `dist/LoopFinder-macOS-*.dmg`
+* **Windows**：`scripts\build_windows.bat` → `dist\LoopFinder.exe`
+* **GitHub Actions 自动云端构建**：推送 `v*` 标签会自动并行构建 Windows x64、macOS Apple Silicon 与 macOS Intel 三端安装包并发布到 Releases。
 
 ---
 
@@ -86,8 +95,11 @@ sudo python3 app.py
 
 ```text
 ├── app.py                           # 跨平台桌面启动入口（支持 pywebview / Chrome/Edge --app）
-├── 启动_macOS.command               # macOS 一键双击启动器
-├── 启动_Windows.bat                 # Windows 一键启动器
+├── LoopFinder.spec                  # PyInstaller 跨平台统一打包配置（Windows .exe / macOS .app）
+├── 启动_macOS.command               # macOS 源码双击启动器
+├── 启动_Windows.bat                 # Windows 源码一键启动器（首次自动建虚拟环境装依赖）
+├── .github/workflows/release.yml    # GitHub Actions 自动构建三端安装包并发布 Release
+├── assets/                          # 应用图标（icon.png / icon.ico / icon.icns）
 ├── docs/
 │   ├── 使用手册.md                  # 新手使用手册（按场景一步步操作）
 │   └── 现场速查卡.md                # 一页纸现场速查卡（可打印）

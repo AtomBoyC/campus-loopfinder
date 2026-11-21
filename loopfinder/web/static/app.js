@@ -161,6 +161,8 @@ async function loadSystem() {
   });
 
   const caps = data.capabilities || {};
+  $("btnGrantBpf").classList.add("hidden");
+  $("btnDownloadNpcap").classList.add("hidden");
   if (caps.can_live_capture) {
     const bestWired = (data.interfaces || []).find((i) => i.active && i.is_wired)
       || (data.interfaces || []).find((i) => i.active);
@@ -168,7 +170,15 @@ async function loadSystem() {
     $("envBanner").classList.add("hidden");
   } else {
     sel.value = "__SIMULATION__";
-    $("envBannerText").textContent = `⚠️ ${caps.hint || "当前无二层原始抓包权限，可直接使用仿真演练模式或弱电间 SNMP 排查。"}`;
+    if (caps.os === "Darwin") {
+      $("envBannerText").textContent = "⚠️ 尚未开启有线抓包权限（点右侧按钮弹窗输入 Mac 开机密码即可立即开启；若只查机房交换机或演练则无需开启）";
+      $("btnGrantBpf").classList.remove("hidden");
+    } else if (caps.os === "Windows" && !caps.has_npcap) {
+      $("envBannerText").textContent = "⚠️ 如需在教研室实时抓包，请先安装 Npcap 驱动（安装时勾选 WinPcap 兼容模式，装完重启软件）；机房 SNMP / Console / 演练模式已可直接用";
+      $("btnDownloadNpcap").classList.remove("hidden");
+    } else {
+      $("envBannerText").textContent = `⚠️ ${caps.hint || "当前无二层原始抓包权限，可直接使用仿真演练模式或弱电间 SNMP 排查。"}`;
+    }
     $("envBanner").classList.remove("hidden");
   }
 }
@@ -517,8 +527,10 @@ function renderEvents(events) {
    ========================================================================= */
 function initBisection() {
   const n = Math.max(2, Math.min(48, parseInt($("bisectTotalPorts").value || "8", 10)));
+  const all = Array.from({ length: n }, (_, i) => i + 1);
   state.bisect = {
-    candidates: Array.from({ length: n }, (_, i) => i + 1),
+    allPorts: all,
+    candidates: [...all],
     step: 1,
     stack: [],
     logs: [],
@@ -532,7 +544,7 @@ function renderBisection() {
   const b = state.bisect;
   if (!b) {
     undoBtn.classList.add("hidden");
-    box.innerHTML = `<div class="empty-hint">点击「开始二分法」生成第一步拔线指令。</div>`;
+    box.innerHTML = `<div class="empty-hint">点击「开始二分法」生成第一步拔线指令（记住：笔记本那根线千万别拔）。</div>`;
     return;
   }
   undoBtn.classList.toggle("hidden", b.stack.length === 0);
@@ -543,11 +555,13 @@ function renderBisection() {
 
   if (b.candidates.length === 1) {
     const culprit = b.candidates[0];
+    const safeOthers = (b.allPorts || []).filter((p) => p !== culprit);
     box.innerHTML = `
       <div class="bisect-step-box">
         <div class="bisect-instruction" style="color:var(--success);">🎯 锁定故障支路！共 ${b.step - 1} 步完成定位</div>
         <div>问题网线 / 小路由器位于：<span class="port-chip culprit">第 ${culprit} 号网口</span></div>
-        <div class="muted-sm">顺着第 ${culprit} 号网线查到对应桌位，核查是否有双口回插或家用路由器反接 LAN 口；若下面还有二级小交换机，点「开始二分法」继续定位。</div>
+        ${safeOthers.length ? `<div class="muted-sm">✅ 其他已排除的网线（#${safeOthers.join(", #")}）现在都可以全部插回恢复上网。</div>` : ""}
+        <div class="muted-sm">顺着第 ${culprit} 号网线查到对应桌位，核查是否有双口回插或家用路由器反接 LAN 口；若下面还有二级小交换机，把笔记本插过去点「开始二分法」继续定位。</div>
         ${logHtml}
       </div>`;
     return;
@@ -556,13 +570,24 @@ function renderBisection() {
   const mid = Math.ceil(b.candidates.length / 2);
   const unplugSet = b.candidates.slice(0, mid);
   const keepSet = b.candidates.slice(mid);
-  const chips = b.candidates.map((p) =>
-    `<span class="port-chip ${unplugSet.includes(p) ? "unplug" : "keep"}">#${p}</span>`
-  ).join("");
+  const safeSet = (b.allPorts || []).filter((p) => !b.candidates.includes(p));
+
+  const chips = (b.allPorts || b.candidates).map((p) => {
+    if (unplugSet.includes(p)) return `<span class="port-chip unplug">拔 #${p}</span>`;
+    if (keepSet.includes(p)) return `<span class="port-chip keep">插 #${p}</span>`;
+    return `<span class="port-chip safe">正常 #${p}</span>`;
+  }).join("");
+
+  const fmtRange = (arr) => arr.length ? `#${arr.join(", #")}` : "无";
 
   box.innerHTML = `
     <div class="bisect-step-box">
-      <div class="bisect-instruction">第 ${b.step} 步：请拔掉红色 ${unplugSet.length} 根网线（#${unplugSet[0]} ~ #${unplugSet[unplugSet.length - 1]}），保留蓝色 ${keepSet.length} 根</div>
+      <div class="bisect-instruction">第 ${b.step} 步（调整好网线后等 5 秒看颜色/听声音）：</div>
+      <div style="font-size:12.5px;line-height:1.7;">
+        <div>🔴 <strong>这一步拔掉</strong>：<code>${fmtRange(unplugSet)}</code></div>
+        <div>🔵 <strong>这一步插上/保持插着</strong>：<code>${fmtRange(keepSet)}</code>${b.step > 1 ? "（之前拔掉的要插回去）" : ""}</div>
+        ${safeSet.length ? `<div>🟢 <strong>已排除（全部插回恢复老师上网）</strong>：<code>${fmtRange(safeSet)}</code></div>` : ""}
+      </div>
       <div class="bisect-range">${chips}</div>
       <div class="inline-row gap-sm">
         <button class="btn btn-sm btn-success" id="btnBisectCleared">✅ 拔掉后变绿/风暴消失了</button>
@@ -1188,6 +1213,24 @@ function bindEvents() {
     if (res.ok) showToast(`已切换告警灵敏度：${$("sensitivitySelect").selectedOptions[0].text}`, "info");
   };
 
+  $("btnGrantBpf").onclick = async () => {
+    const btn = $("btnGrantBpf");
+    btn.disabled = true;
+    btn.textContent = "⏳ 等待输入 Mac 密码...";
+    try {
+      const res = await apiPost("/api/system/grant_bpf");
+      if (res.ok) {
+        showToast(res.message || "已开启有线抓包权限！", "success", 4500);
+        await loadSystem();
+      } else {
+        showToast(res.error || "授权未完成", "warn", 5000);
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🔐 一键开启本机抓包权限";
+    }
+  };
+
   $("btnQuickDemo").onclick = async () => {
     $("ifaceSelect").value = "__SIMULATION__";
     await apiPost("/api/capture/start", { interface: "__SIMULATION__", mode: "active", backend: "simulation" });
@@ -1244,6 +1287,13 @@ function bindEvents() {
   };
 
   document.body.addEventListener("click", (ev) => {
+    const ext = ev.target.closest("a[data-external-open]");
+    if (ext && window.pywebview?.api?.open_in_browser) {
+      ev.preventDefault();
+      const href = ext.getAttribute("href");
+      if (href) window.pywebview.api.open_in_browser(href);
+      return;
+    }
     const a = ev.target.closest(".mac-jump");
     if (!a) return;
     ev.preventDefault();
@@ -1275,6 +1325,14 @@ function bindEvents() {
   $("btnBatchScanSim").onclick = () => runBatchScan(true);
   $("btnHopTrace").onclick = () => runHopTrace(false);
   $("btnHopTraceSim").onclick = () => runHopTrace(true);
+
+  $("btnInvLoadSample").onclick = async () => {
+    const res = await apiPost("/api/inventory/load_sample");
+    if (res.ok) {
+      showToast("已载入 4 台示例交换机（熟悉后可删掉换成自己学校的）", "info");
+      loadInventory();
+    }
+  };
 
   $("btnInvAdd").onclick = async () => {
     const res = await apiPost("/api/inventory/upsert", {
@@ -1335,6 +1393,14 @@ function bindEvents() {
     }
   };
   // Tab 4 Ledger
+  $("btnLedgerLoadSample").onclick = async () => {
+    const res = await apiPost("/api/ledger/load_sample");
+    if (res.ok) {
+      showToast(`已载入 ${res.imported} 条示例面板台账（可作填写参考）`, "info");
+      loadLedger();
+    }
+  };
+
   $("btnLedgerAdd").onclick = async () => {
     const res = await apiPost("/api/ledger/upsert", {
       switch_ip: $("lgIp").value,

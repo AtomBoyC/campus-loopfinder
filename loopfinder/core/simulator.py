@@ -15,7 +15,7 @@ import struct
 import time
 from typing import Any, Dict, List, Optional
 
-from loopfinder.core.ledger import PortLedger
+from loopfinder.core.ledger import PortLedger, normalize_port_name
 from loopfinder.core.packet_parser import (
     ETHERTYPE_ARP,
     ETHERTYPE_IPV4,
@@ -169,6 +169,28 @@ class ClassroomSimulator:
         return frames
 
 
+DEMO_LOCATIONS: Dict[str, str] = {
+    "10.10.1.1|ge1/0/1": "实验楼 · 三楼弱电间 · 上联核心",
+    "10.10.1.1|ge1/0/14": "第一教学楼 · 302大教研室 · 汇聚下联->HW-3F-East-SW02",
+    "10.10.1.1|ge1/0/15": "第一教学楼 · 305教研室 · 东墙1-6号面板",
+    "10.10.1.1|ge1/0/16": "第一教学楼 · 308教研室 · 北墙2号面板",
+    "10.10.2.12|ge0/0/1": "第一教学楼 · 302大教研室 · 北墙1号信息点",
+    "10.10.2.12|ge0/0/8": "第一教学楼 · 302大教研室 · 南墙3号信息点",
+    "10.10.2.12|ge0/0/14": "第一教学楼 · 302大教研室 · 东墙4号信息点",
+    "10.10.2.12|ge0/0/15": "第一教学楼 · 302大教研室 · 东墙5号信息点",
+    "10.10.2.12|ge0/0/24": "第一教学楼 · 三楼弱电间 · 上联汇聚口",
+}
+
+
+def demo_location(switch_ip: str, port_name: str, ledger: Optional[PortLedger] = None) -> str:
+    """Resolve location from user ledger first, falling back to demo labels in simulation mode."""
+    if ledger is not None:
+        hit = ledger.format_location(switch_ip, port_name)
+        if hit:
+            return hit
+    return DEMO_LOCATIONS.get(f"{switch_ip.strip()}|{normalize_port_name(port_name)}", "")
+
+
 def simulate_snmp_switch_scan(switch_ip: str, ledger: PortLedger) -> Dict[str, Any]:
     """Generate a realistic multi-vendor weak-current room switch scan result.
 
@@ -239,8 +261,8 @@ def simulate_snmp_switch_scan(switch_ip: str, ledger: PortLedger) -> Dict[str, A
                 "category": "soho_router",
                 "from_port": "GigabitEthernet0/0/14",
                 "to_port": "GigabitEthernet0/0/15",
-                "from_location": ledger.format_location(ip_clean, "GigabitEthernet0/0/14"),
-                "to_location": ledger.format_location(ip_clean, "GigabitEthernet0/0/15"),
+                "from_location": demo_location(ip_clean, "GigabitEthernet0/0/14", ledger),
+                "to_location": demo_location(ip_clean, "GigabitEthernet0/0/15", ledger),
             },
             {
                 "mac": "48:2A:E3:11:22:01",
@@ -248,8 +270,8 @@ def simulate_snmp_switch_scan(switch_ip: str, ledger: PortLedger) -> Dict[str, A
                 "category": "endpoint",
                 "from_port": "GigabitEthernet0/0/15",
                 "to_port": "GigabitEthernet0/0/14",
-                "from_location": ledger.format_location(ip_clean, "GigabitEthernet0/0/15"),
-                "to_location": ledger.format_location(ip_clean, "GigabitEthernet0/0/14"),
+                "from_location": demo_location(ip_clean, "GigabitEthernet0/0/15", ledger),
+                "to_location": demo_location(ip_clean, "GigabitEthernet0/0/14", ledger),
             },
         ]
         sample_macs = {
@@ -284,8 +306,8 @@ def simulate_snmp_switch_scan(switch_ip: str, ledger: PortLedger) -> Dict[str, A
                 "category": "soho_router",
                 "from_port": "GigabitEthernet1/0/14",
                 "to_port": "GigabitEthernet1/0/15",
-                "from_location": ledger.format_location(ip_clean, "GigabitEthernet1/0/14"),
-                "to_location": ledger.format_location(ip_clean, "GigabitEthernet1/0/15"),
+                "from_location": demo_location(ip_clean, "GigabitEthernet1/0/14", ledger),
+                "to_location": demo_location(ip_clean, "GigabitEthernet1/0/15", ledger),
             },
         ]
         sample_macs = {
@@ -311,7 +333,7 @@ def simulate_snmp_switch_scan(switch_ip: str, ledger: PortLedger) -> Dict[str, A
         mbps = hot["mbps"] if hot else (round(random.uniform(0.2, 8.5), 2) if up else 0.0)
         is_uplink = bool(hot and hot.get("uplink"))
         lldp = lldp_map.get(idx)
-        loc = ledger.format_location(switch_ip, pname)
+        loc = demo_location(switch_ip, pname, ledger)
 
         reasons: List[str] = []
         score = 0

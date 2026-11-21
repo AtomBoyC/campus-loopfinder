@@ -1,0 +1,209 @@
+name: Build & Publish Ready-to-Use Releases
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "可选：手动指定发布版本号（例如 v2.3.0）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run unittest suite
+        run: python -m unittest discover -s tests -v
+
+  build-windows:
+    name: Build Windows x64 (.exe)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build & runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pywebview scapy pyserial
+      - name: Build standalone LoopFinder.exe
+        run: python -m PyInstaller --noconfirm --clean LoopFinder.spec
+      - name: Smoke test LoopFinder.exe
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\LoopFinder.exe" -ArgumentList "--no-open", "--port", "19876" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 25; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+              $resp = Invoke-RestMethod -Uri "http://127.0.0.1:19876/api/system" -TimeoutSec 2
+              if ($resp.version) {
+                Write-Host "Smoke test OK: version=$($resp.version), has_scapy=$($resp.capabilities.has_scapy)"
+                $ok = $true
+                break
+              }
+            } catch {}
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "LoopFinder.exe smoke test failed!" }
+      - name: Package LoopFinder-Windows-x64.zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release_pkg | Out-Null
+          Copy-Item dist\LoopFinder.exe release_pkg\LoopFinder.exe
+          Copy-Item docs\现场速查卡.md release_pkg\现场速查卡.md
+          @"
+          ========================================================
+            LoopFinder 校园网环路定位仪 (Windows 开袋即食版)
+          ========================================================
+
+          1. 直接双击 LoopFinder.exe 即可打开（弹出“是否允许更改设备”点「是」），无需安装 Python！
+
+          2. 关于抓包驱动 (Npcap)：
+             - 机房 SNMP 查交换机、Console 串口直连、仿真演练：打开直接就能用，不用装任何驱动！
+             - 去教研室实时抓包测环路 / 扫私接路由器：需安装一次免费驱动 Npcap：
+               下载地址：https://npcap.com/#download
+               （安装时请勾选 "Install Npcap in WinPcap API-compatible Mode"，装完重启本软件即可）
+
+          3. 完整新手图文手册：
+             https://github.com/AtomBoyC/campus-loopfinder/blob/main/docs/%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C.md
+          "@ | Out-File -FilePath "release_pkg\点我查看_新手必看.txt" -Encoding utf8
+          Compress-Archive -Path release_pkg\* -DestinationPath LoopFinder-Windows-x64.zip -Force
+          Get-Item LoopFinder-Windows-x64.zip | Select-Object Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LoopFinder-Windows-x64
+          path: LoopFinder-Windows-x64.zip
+
+  build-macos:
+    name: Build macOS (${{ matrix.arch_label }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch_label: AppleSilicon
+          - runner: macos-15-intel
+            arch_label: Intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build & runtime dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyinstaller pywebview pyserial
+      - name: Build standalone LoopFinder.app
+        run: python3 -m PyInstaller --noconfirm --clean LoopFinder.spec
+      - name: Ad-hoc sign LoopFinder.app
+        run: |
+          codesign --force --deep --sign - dist/LoopFinder.app
+          codesign --verify --deep --strict dist/LoopFinder.app
+      - name: Smoke test LoopFinder.app
+        run: |
+          dist/LoopFinder.app/Contents/MacOS/LoopFinder --no-open --port 19876 &
+          PID=$!
+          OK=0
+          for i in $(seq 1 20); do
+            sleep 1
+            if curl -sf http://127.0.0.1:19876/api/system | grep -q '"version"'; then
+              echo "Smoke test OK:"
+              curl -sf http://127.0.0.1:19876/api/system | head -c 300
+              echo ""
+              OK=1
+              break
+            fi
+          done
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+          test "$OK" -eq 1
+      - name: Package drag-to-Applications DMG
+        run: |
+          mkdir -p dmg_stage
+          cp -R dist/LoopFinder.app dmg_stage/
+          ln -s /Applications dmg_stage/Applications
+          cp docs/现场速查卡.md dmg_stage/现场速查卡.md
+          cat <<'TXT' > dmg_stage/首次打开必看.txt
+          ========================================================
+            LoopFinder 校园网环路定位仪 (macOS 开袋即食版)
+          ========================================================
+
+          1. 安装：把 LoopFinder.app 拖进右侧 Applications（应用程序）文件夹，无需安装 Python！
+
+          2. 首次打开如果系统提示“无法验证开发者 / 已损坏”：
+             打开“终端”粘贴下面这一行回车（解除系统下载隔离标记），然后再双击打开即可：
+             xattr -cr /Applications/LoopFinder.app
+
+          3. 开启教研室有线抓包权限（免敲命令）：
+             打开软件后，点页面上方黄色条里的「🔐 一键开启本机抓包权限」，弹窗输入开机密码即可立刻抓包！
+             （如果只用机房 SNMP、Console 串口或仿真演练，甚至不需要输入密码。）
+          TXT
+          DMG_NAME="LoopFinder-macOS-${{ matrix.arch_label }}.dmg"
+          hdiutil create -volname "LoopFinder" -srcfolder dmg_stage -ov -format UDZO "$DMG_NAME"
+          ls -lh "$DMG_NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LoopFinder-macOS-${{ matrix.arch_label }}
+          path: LoopFinder-macOS-${{ matrix.arch_label }}.dmg
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: List release artifacts
+        run: ls -lh release-assets/
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          cat <<'NOTES' > release_notes.md
+          ## 🎉 LoopFinder 开袋即食版（免装 Python，下载双击即用）
+
+          ### 👇 怎么选安装包？
+
+          | 你的电脑 | 下载这个文件 | 打开方式 |
+          |---|---|---|
+          | **Windows 10 / 11 电脑** | `LoopFinder-Windows-x64.zip` | 解压后双击 **`LoopFinder.exe`**（弹窗点「是」）。去教研室实时抓包需额外装一次 [Npcap](https://npcap.com/#download)（勾选 WinPcap 兼容模式）；机房 SNMP / Console / 演练直接可用。 |
+          | **Mac（M1 / M2 / M3 / M4 芯片）** | `LoopFinder-macOS-AppleSilicon.dmg` | 打开后把 `LoopFinder.app` 拖进 Applications。首次若被系统拦截，在终端执行一次 `xattr -cr /Applications/LoopFinder.app` 后双击打开。 |
+          | **Mac（较老的 Intel 芯片）** | `LoopFinder-macOS-Intel.dmg` | 同上（查看芯片：点左上角 🍎 → 关于本机）。 |
+
+          ### ✨ 本版本主要亮点
+          - **开袋即食打包**：内置全部界面、离线 OUI 厂商库与运行环境，无需再折腾 Python 和 `pip`。
+          - **macOS 图形化一键授权抓包**：打开软件后点顶部「🔐 一键开启本机抓包权限」弹窗输密码即可，不再需要开终端敲 `sudo`。
+          - **二分法拔线向导更清晰**：每一步明确标出「拔掉哪些 / 保持插着哪些 / 已排除可全部插回哪些」，并提醒不要拔笔记本那根线。
+          - **干净的初始台账与资产簿**：首次打开不再塞满 `10.10.x.x` 假数据，需要参考模板时可点「载入示例」一键载入。
+
+          📖 **新手一步步图文教程**：[《新手使用手册》](https://github.com/AtomBoyC/campus-loopfinder/blob/main/docs/%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C.md) ｜ [《一页纸现场速查卡》](https://github.com/AtomBoyC/campus-loopfinder/blob/main/docs/%E7%8E%B0%E5%9C%BA%E9%80%9F%E6%9F%A5%E5%8D%A1.md)
+          NOTES
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --notes-file release_notes.md --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" release-assets/* --title "LoopFinder $TAG（开袋即食桌面版）" --notes-file release_notes.md --repo "$GITHUB_REPOSITORY"
+          fi

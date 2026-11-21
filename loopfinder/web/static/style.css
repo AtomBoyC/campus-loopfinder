@@ -498,6 +498,7 @@ textarea {
 }
 .port-chip.unplug { background: rgba(239, 68, 68, 0.2); border-color: var(--danger); color: var(--danger); }
 .port-chip.keep { background: rgba(59, 130, 246, 0.16); border-color: var(--primary); color: var(--primary); }
+.port-chip.safe { background: rgba(16, 185, 129, 0.16); border-color: var(--success); color: var(--success); }
 .port-chip.culprit { background: var(--danger); border-color: var(--danger); color: #fff; font-size: 14px; padding: 5px 12px; }
 
 /* Tables & Lists */

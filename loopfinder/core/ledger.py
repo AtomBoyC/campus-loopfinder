@@ -13,7 +13,7 @@ import os
 import re
 from typing import Dict, List, Optional
 
-from loopfinder.core.paths import atomic_write_text, default_data_file
+from loopfinder.core.paths import atomic_write_text, default_data_file, resource_path
 
 
 _PORT_PREFIX_RE = re.compile(
@@ -53,8 +53,7 @@ class PortLedger:
     """Persistent CSV/JSON ledger mapping (switch_ip, port) to campus physical location."""
 
     def __init__(self, storage_path: Optional[str] = None) -> None:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.sample_csv = os.path.join(base_dir, "data", "sample_ledger.csv")
+        self.sample_csv = resource_path("loopfinder", "data", "sample_ledger.csv")
         self.storage_path = storage_path or default_data_file("campus_ledger.json")
         self.entries: List[Dict[str, str]] = []
         self._index: Dict[str, Dict[str, str]] = {}
@@ -83,14 +82,16 @@ class PortLedger:
                     return
             except Exception:
                 pass
-        # Seed from sample CSV on first launch
+        # Start clean on first launch so fake sample rows don't pollute the user's real ledger
+        self.entries = []
+        self._rebuild_index()
+
+    def load_sample(self, persist: bool = True) -> int:
+        """Explicitly load bundled sample CSV rows when user asks for demo/template entries."""
         if os.path.isfile(self.sample_csv):
-            try:
-                with open(self.sample_csv, "r", encoding="utf-8") as f:
-                    self.import_csv_text(f.read(), replace=True, persist=False)
-            except Exception:
-                self.entries = []
-                self._rebuild_index()
+            with open(self.sample_csv, "r", encoding="utf-8") as f:
+                return self.import_csv_text(f.read(), replace=False, persist=persist)
+        return 0
 
     def save(self) -> None:
         atomic_write_text(self.storage_path, json.dumps(self.entries, ensure_ascii=False, indent=2))

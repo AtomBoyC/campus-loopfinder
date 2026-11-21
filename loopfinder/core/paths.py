@@ -11,7 +11,18 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import sys
 from typing import Optional
+
+
+def resource_path(*parts: str) -> str:
+    """Resolve bundled static/data files cleanly both from source and PyInstaller bundles."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return os.path.join(meipass, *parts)
+    # repo root is two levels above loopfinder/core/paths.py
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(root, *parts)
 
 
 def _real_user_home() -> str:

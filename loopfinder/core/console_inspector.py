@@ -638,6 +638,10 @@ GE1/0/16          00d0-f811-2233   Gi0/24               RJ-3F-West-SW03
     parsed_logs = parse_switch_cli_output(mac_move_txt, switch_ip=ip, ledger=ledger)
     flap_ports = {p["port"] for p in parsed_logs["affected_ports"]}
     ranked = compute_counter_deltas(s1, s2, dt=3.0, lldp_map=lldp_map, flap_ports=flap_ports, switch_ip=ip, ledger=ledger)
+    from loopfinder.core.simulator import demo_location
+    for row in ranked:
+        if not row["location"]:
+            row["location"] = demo_location(ip, row["port"], ledger)
 
     top = ranked[0]
     raw_transcript = "\n".join([

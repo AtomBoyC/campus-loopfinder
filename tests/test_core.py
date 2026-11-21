@@ -364,13 +364,17 @@ class TestV2Enhancements(unittest.TestCase):
     def test_inventory_batch_scan_and_3hop_trace(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             inv = SwitchInventory(storage_path=os.path.join(d, "sw.json"))
+            # Starts clean on first launch (no fake switches polluting user's real table)
+            self.assertEqual(len(inv.list_switches()), 0)
+            inv.load_sample()
             self.assertGreaterEqual(len(inv.list_switches()), 4)
             inv.upsert({"ip": "10.10.9.1", "name": "TEST-SW", "building": "测试楼", "community": "ro_key", "snmp_version": "1"})
             self.assertIsNotNone(inv.get_by_ip("10.10.9.1"))
             self.assertIn("TEST-SW", inv.export_csv_text())
             inv.delete("10.10.9.1")
 
-            ledger = PortLedger()
+            ledger = PortLedger(storage_path=os.path.join(d, "empty_ledger.json"))
+            self.assertEqual(len(ledger.list_entries()), 0)
             bldg_sws = inv.list_switches(building="第一教学楼")
             batch = batch_scan_switches(bldg_sws, ledger, simulate=True)
             self.assertTrue(batch["ok"])
@@ -380,12 +384,17 @@ class TestV2Enhancements(unittest.TestCase):
             self.assertEqual(batch["switches"][-1]["switch_ip"], "10.10.2.13")
 
             # 3-hop automatic drill-down: Core 10.10.0.1 -> Agg 10.10.1.1 -> Access 10.10.2.12 (GE0/0/14)
+            # Even with empty user ledger, simulation mode resolves demo room names cleanly!
             trace = trace_loop_hops("10.10.0.1", ledger=ledger, inventory=inv, simulate=True)
             self.assertTrue(trace["ok"])
             self.assertEqual(len(trace["hops"]), 3)
             self.assertEqual([h["switch_ip"] for h in trace["hops"]], ["10.10.0.1", "10.10.1.1", "10.10.2.12"])
             self.assertEqual(trace["hops"][-1]["port"], "GigabitEthernet0/0/14")
             self.assertIn("302大教研室", trace["hops"][-1]["location"])
+
+            # Explicit sample loading works for Ledger too
+            loaded = ledger.load_sample(persist=True)
+            self.assertGreaterEqual(loaded, 8)
 
             # Target-MAC 3-hop trace
             mac_trace = trace_loop_hops("10.10.0.1", ledger=ledger, inventory=inv, target_mac="d80d-176a-3b9c", simulate=True)
@@ -547,6 +556,7 @@ Interface : GigabitEthernet 0/1
                 inv = SwitchInventory()
                 inv.upsert({"ip": "10.9.9.1", "name": "X"})
                 self.assertTrue(os.path.isfile(os.path.join(d, "lfdata", "campus_switches.json")))
+                self.assertTrue(os.path.isfile(paths.resource_path("loopfinder", "web", "static", "index.html")))
             finally:
                 if old is None:
                     os.environ.pop("LOOPFINDER_DATA_DIR", None)

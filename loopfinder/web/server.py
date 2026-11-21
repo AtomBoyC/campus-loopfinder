@@ -16,10 +16,11 @@ from urllib.parse import parse_qs, urlparse
 from loopfinder import __app_name__, __version__
 from loopfinder.core.capture import SENSITIVITY_PRESETS, CaptureController
 from loopfinder.core.console_inspector import inspect_switch_console, list_serial_ports
-from loopfinder.core.interfaces import check_capabilities, list_interfaces
-from loopfinder.core.inventory import SwitchInventory
+from loopfinder.core.interfaces import check_capabilities, list_interfaces, request_macos_bpf_permission
+from loopfinder.core.inventory import DEFAULT_SAMPLE_SWITCHES, SwitchInventory
 from loopfinder.core.l3_tracer import run_l3_loop_trace
 from loopfinder.core.ledger import PortLedger
+from loopfinder.core.paths import resource_path
 from loopfinder.core.snmp import (
     batch_scan_switches,
     lookup_mac_in_scan,
@@ -30,7 +31,7 @@ from loopfinder.core.cli_parser import SAMPLE_CLI_OUTPUT, parse_switch_cli_outpu
 from loopfinder.core.syslog_listener import SyslogRadar
 
 
-STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+STATIC_DIR = resource_path("loopfinder", "web", "static")
 
 
 class AppContext:
@@ -466,6 +467,9 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
             path = parsed.path
             body = self._read_json()
 
+            if path == "/api/system/grant_bpf":
+                res = request_macos_bpf_permission()
+                return self._send_json(res, status=200 if res.get("ok") else 400)
             if path == "/api/capture/start":
                 res = app_ctx.capture.start(
                     interface=str(body.get("interface") or ""),
@@ -528,8 +532,10 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                 simulate = bool(body.get("simulate", False))
                 interval = max(1.0, min(6.0, float(body.get("sample_interval") or 2.0)))
                 targets = app_ctx.inventory.list_switches(building=building)
+                if not targets and simulate:
+                    targets = [dict(x) for x in DEFAULT_SAMPLE_SWITCHES]
                 if not targets:
-                    return self._send_json({"ok": False, "error": "资产簿中没有可扫描的交换机"}, status=400)
+                    return self._send_json({"ok": False, "error": "资产簿为空，请先录入交换机（或点「✨ 载入示例设备」体验）"}, status=400)
                 res = batch_scan_switches(targets, app_ctx.ledger, sample_interval=interval, simulate=simulate)
                 for sw_row in res["switches"]:
                     if sw_row.get("full_scan"):
@@ -574,6 +580,9 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
                     return self._send_json({"ok": False, "error": str(e)}, status=400)
             if path == "/api/inventory/delete":
                 items = app_ctx.inventory.delete(str(body.get("ip") or ""))
+                return self._send_json({"ok": True, "switches": items})
+            if path == "/api/inventory/load_sample":
+                items = app_ctx.inventory.load_sample()
                 return self._send_json({"ok": True, "switches": items})
             if path == "/api/inventory/import_csv":
                 cnt = app_ctx.inventory.import_csv_text(str(body.get("csv_text") or ""), replace=bool(body.get("replace", False)))
@@ -631,6 +640,9 @@ def create_server(host: str = "127.0.0.1", port: int = 0, ctx: Optional[AppConte
             if path == "/api/ledger/delete":
                 entries = app_ctx.ledger.delete(str(body.get("switch_ip") or ""), str(body.get("port") or ""))
                 return self._send_json({"ok": True, "entries": entries})
+            if path == "/api/ledger/load_sample":
+                cnt = app_ctx.ledger.load_sample(persist=True)
+                return self._send_json({"ok": True, "imported": cnt, "entries": app_ctx.ledger.list_entries()})
             if path == "/api/ledger/import_csv":
                 csv_text = str(body.get("csv_text") or "")
                 replace = bool(body.get("replace", False))
