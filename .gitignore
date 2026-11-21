@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local campus runtime data & exported captures/reports (keep private school IPs/SNMP communities out of git!)
+loopfinder/data/campus_ledger.json
+loopfinder/data/campus_switches.json
+*.pcap
+LoopFinder_Report_*.md
+LoopFinder_Report_*.html

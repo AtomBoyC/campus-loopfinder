@@ -1,0 +1,10 @@
+# LoopFinder 可选增强依赖
+# 说明：
+# - macOS 上零依赖即可运行（内置原生 /dev/bpf 二层引擎 + 纯 Python SNMPv2c 引擎）
+# - Windows 上实时二层抓包/主动探针需要 scapy + Npcap (https://npcap.com/)
+# - SSH 实时采集交换机需要 paramiko（若不装也可使用「离线日志粘贴解析」）
+# - 原生独立窗口（无需 Chrome/Edge）需要 pywebview
+
+scapy>=2.5.0
+paramiko>=3.4.0
+pywebview>=5.0.0
